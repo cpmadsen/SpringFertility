@@ -1,3 +1,14 @@
+# ==========================================
+# Author: Chris Madsen, Brandon Kwon
+# Script purpose: create 'master dataset' for running models based on feedback from 
+# Adam Walter re: how to join tables.
+# 
+# Steps for joins:
+# 1. Treatment table cleaned and structured by Adam.
+# 2. Structured egg table left_joined onto treatment table using pat_id and tx_id (one-to-many join as one pat_id can have many egg_ids, row count increases)
+# 3. Raw embryo table left_joined onto result of #2 table (one-to-one join as both seem to be one-row-per-egg-journey, row count remains the same)
+# The above steps keep the 'universe' restricted to the one we need (whatever that is ^^) because we started with the treatment table already filtered etc.
+# ==========================================
 
 treat = readr::read_csv("Data/Branch Care/Data/treatment_table_20260203 Adam Walter.csv") |> 
   dplyr::select(-pregnant)
@@ -36,6 +47,8 @@ treat_w_egg_and_embryo |>
 
 # 12K cycles, 5K clinical pregnancies
 
+# ===== Code below is an unfinished draft ===== # 
+
 # Coalesce various columns, collapse some columns into 'summarized' columns like 'normal and euploid'.
 treat_w_egg_and_embryo |> 
   dplyr::mutate(healthy_embryo = )
@@ -46,4 +59,4 @@ treat_w_egg_and_embryo |>
   dplyr::mutate(number_eggs_collected = dplyr::n()) |> 
   dplyr::group_by(pat_id, tx_id, )
   dplyr::add_count(pat_id, tx_id, name = 'number_eggs_collected') |> 
-  dplyr::add_count
+  dplyr::add_count()
