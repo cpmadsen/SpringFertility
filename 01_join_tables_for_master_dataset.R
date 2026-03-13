@@ -13,6 +13,7 @@
 treat = readr::read_csv("Data/Branch Care/Data/treatment_table_20260203 Adam Walter.csv") |> 
   dplyr::select(-pregnant)
 
+# Get row count
 nrow(treat)
 
 length(unique(treat$pat_id))
