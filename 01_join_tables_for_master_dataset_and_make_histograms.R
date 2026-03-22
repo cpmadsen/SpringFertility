@@ -66,10 +66,12 @@ treat_w_egg_and_embryo |>
 
 # 12K cycles, 5K clinical pregnancies
 
-grouping_vars = c('pat_id','tx_id')
+# grouping_vars = c('pat_id','tx_id')
+# TEST: what if we include cycle_id in the grouping vars?
+grouping_vars = c('pat_id','tx_id','tx_cycle')
 
 # Add re-calculated number_eggs_collected, etc.
-treat_by_pat_tx_ids = treat_w_egg_and_embryo |>
+treat_by_pat_tx_cycle_ids = treat_w_egg_and_embryo |>
   # Question: Are these the right levels for the 'pregnant' column? Could a 'No Scan' in fact be a case of someone achieving pregnancy later?
   dplyr::filter(pregnant %in% c('Biochemical','Clinical','No Scan','Pending')) |> 
   # Add a categorical binned version of age.
@@ -103,9 +105,12 @@ treat_by_pat_tx_ids = treat_w_egg_and_embryo |>
   dplyr::mutate(afc = dplyr::coalesce(afc_first_baseline, afc_other)) |> 
   dplyr::ungroup() |> 
   dplyr::mutate(pregnant_bool = as.numeric(pregnant == 'Clinical')) |> 
+  dplyr::mutate(live_birth = as.numeric(live_birth),
+                live_birth_derive = as.numeric(live_birth_derive %in% c("Outcome Live birth"))) |> 
   # Narrow down columns to get one row per patient.
-  dplyr::select(pat_id,
-                tx_id,
+  dplyr::select(dplyr::all_of(grouping_vars),
+                treatment_start_date,
+                primary_infertility_diagnosis,
                 number_eggs_collected,
                 number_m2_eggs,
                 number_2pn_eggs,
@@ -115,17 +120,24 @@ treat_by_pat_tx_ids = treat_w_egg_and_embryo |>
                 amh,
                 afc,
                 pregnant,
-                pregnant_bool) |> 
+                pregnant_bool,
+                live_birth,
+                live_birth_derive) |> 
   dplyr::distinct()
 
-treat_by_pat_tx_ids |> 
+treat_by_pat_tx_cycle_ids |> 
   dplyr::filter(pat_id == 'C100151')
 
-treat_by_pat_tx_ids |> 
+treat_by_pat_tx_cycle_ids |> 
   dplyr::count(pat_id, sort = T)
 
-treat_by_pat_tx_ids |> 
+treat_by_pat_tx_cycle_ids |> 
   dplyr::count(age, sort = T)
+
+# Write out data to new folder.
+if (!dir.exists("data/clean_data/")) dir.create("data/clean_data")
+
+readr::write_csv(treat_by_pat_tx_cycle_ids, file = "data/clean_data/treatments_by_pat_id_tx_id_cycle_id.csv")
 
 # The above table should have 1 row per patient/treatment_id combo, with all the goodies recalculated from the expanded one-row-per-egg table.
 

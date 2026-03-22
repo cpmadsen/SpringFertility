@@ -1,0 +1,92 @@
+---
+title: "ART Summary Tables"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r include = F, read_in_data}
+library(knitr)
+library(tidyverse)
+library(plotly)
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+dat = readr::read_csv("data/clean_data/treatments_by_pat_id_tx_id_cycle_id.csv")
+
+dat$age_bin = factor(dat$age_bin, levels = c("<35","35-37","38-40","41-42",">42"))
+```
+
+```{r minor_data_cleaning}
+dat = dat |> 
+  dplyr::mutate(primary_infertility_diagnosis_cl = dplyr::case_when(
+    stringr::str_detect(primary_infertility_diagnosis,'Tubal') ~ "Tubal factor",
+    stringr::str_detect(primary_infertility_diagnosis,'Uterine') ~ "Uterine factor",
+    stringr::str_detect(primary_infertility_diagnosis,'Male') ~ "Male factor",
+    stringr::str_detect(primary_infertility_diagnosis,'Ovul') ~ "Ovulatory dysfunction",
+    stringr::str_detect(primary_infertility_diagnosis,'[rR]eserve') ~ "Diminished ovarian reserve",
+    is.na(primary_infertility_diagnosis) ~ "None",
+    T ~ primary_infertility_diagnosis
+  )) 
+```
+
+# Data Overview
+
+## Methodology
+
+We took the cleaned treatment table provided by Adam Walter and left joined on the structured egg table and the embryo table. We then summarised key values from across this composite dataset to produce the following table:
+
+```{r}
+dat |> 
+  DT::datatable()
+```
+
+# Spring Fertility ART tables
+
+## 2022 Clinic Summary
+
+To compare with published ART tables for Spring Fertility here: https://art.cdc.gov/
+```{r}
+clinic_summary_incomplete = dat |> 
+  dplyr::filter(lubridate::year(treatment_start_date) == 2022) |> 
+  dplyr::reframe(total_cycles = length(unique(tx_cycle)),
+                 pregnancies = sum(pregnant_bool[number_euploid_embryos > 1]))
+
+clinic_summary_incomplete |> 
+  knitr::kable()
+```
+
+## Age of Patient Histogram
+```{r}
+p = dat |> 
+  dplyr::mutate(total_patients = dplyr::n()) |> 
+  dplyr::group_by(age_bin) |> 
+  dplyr::reframe(patients_in_bin = dplyr::n(), total_patients = unique(total_patients)) |> 
+  dplyr::ungroup() |> 
+  dplyr::mutate(perc_in_bin = round(patients_in_bin / total_patients,2)) |> 
+  ggplot() + 
+  geom_col(aes(x = age_bin, y = perc_in_bin)) + 
+  labs(y = "Percent (%)", x = "Age of Patient") +
+  scale_y_continuous(labels = scales::percent)
+
+ggplotly(p)
+```
+
+## Success Rates: Patients Using Own Eggs
+```{r}
+
+# NOTE: I am unsure if I've used the correct variable to infer if patients are using their own eggs...
+
+srdat = dat |> 
+  dplyr::group_by(age_bin, primary_infertility_diagnosis_cl) |> 
+  dplyr::reframe(treatments_with_1_plus_eggs_collected = sum(number_eggs_collected >= 1),
+                 treatments_leading_to_live_birth = sum(live_birth,na.rm=T)) |> 
+  dplyr::mutate(treatment_success_perc = treatments_leading_to_live_birth / treatments_with_1_plus_eggs_collected) |>
+  dplyr::mutate(treatment_success_perc = tidyr::replace_na(treatment_success_perc, 0))
+  
+srdat |> 
+  ggplot() + 
+  geom_col(aes(x = age_bin, y = treatment_success_perc), linewidth = 2) +
+  facet_wrap( ~ primary_infertility_diagnosis_cl, scales = 'free') + 
+  scale_y_continuous(labels = scales::percent) + 
+  labs(y = 'Success Rate (%)', x = "Age Category")
+```
+
