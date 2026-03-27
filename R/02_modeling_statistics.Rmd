@@ -1,0 +1,154 @@
+---
+title: "Insurance Modeling Analysis"
+author: "Charm Economics"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+library(dplyr)
+library(ggplot2)
+library(VGAM)
+library(knitr)
+```
+
+```{r}
+df <- readr::read_rds("data/clean_data/cld_2022.rds") |> 
+  dplyr::rename(pregnant = pregnant_rev) |> 
+  dplyr::mutate(pregnant = ifelse(pregnant == "yes", 1, 0))
+
+df <- df %>%
+  mutate(age_group = case_when(
+    age < 35 ~ "<35",
+    age >= 35 & age <= 37 ~ "35-37",
+    age >= 38 & age <= 40 ~ "38-40",
+    age >= 41 ~ "41+"
+  ))
+
+df$age_group <- as.factor(df$age_group)
+```
+
+# Stats {.tabset}
+
+## Descriptive Pregnancy Rates
+```{r}
+pregnancy_rates <- df %>%
+  group_by(age_group) %>%
+  summarize(
+    cycles = n(),
+    pregnancies = sum(pregnant),
+    pregnancy_rate = pregnancies / cycles
+  )
+
+kable(pregnancy_rates, digits = 3)
+
+ggplot(pregnancy_rates, aes(x = age_group, y = pregnancy_rate)) +
+  geom_col() +
+  labs(
+    title = "Pregnancy Rate by Age Group",
+    x = "Age Group",
+    y = "Pregnancy Rate"
+  )
+
+```
+
+## Binomial Logistic Model
+```{r}
+logit_model <- glm(
+  pregnant ~ age_group,
+  family = binomial(link = "logit"),
+  data = df
+)
+
+logit_summary <- summary(logit_model)$coefficients
+kable(logit_summary, digits = 3)
+```
+
+## Predicted Probabilities
+```{r}
+predicted_probs <- df %>%
+  distinct(age_group) %>%
+  mutate(predicted_p = predict(logit_model, newdata = ., type = "response"))
+
+kable(predicted_probs, digits = 3)
+
+ggplot(predicted_probs, aes(x = age_group, y = predicted_p)) +
+  geom_point(size = 3) +
+  geom_line(aes(group = 1)) +
+  labs(
+    title = "Predicted Probability of Pregnancy by Age Group",
+    x = "Age Group",
+    y = "Predicted Probability"
+  )
+```
+
+## Multi-Cycle Success (Insurance View)
+
+```{r}
+N <- 3
+
+multi_cycle <- predicted_probs %>%
+  mutate(
+    success_N_cycles = 1 - (1 - predicted_p)^N,
+    failure_N_cycles = (1 - predicted_p)^N
+  )
+
+kable(multi_cycle, digits = 3)
+
+ggplot(multi_cycle, aes(x = age_group, y = success_N_cycles)) +
+  geom_col() +
+  labs(
+    title = paste("Probability of Success Within", N, "Cycles"),
+    x = "Age Group",
+    y = "Success Probability"
+  )
+```
+
+## Attempt-Level Modeling
+```{r}
+df_attempt_recalc <- df |> 
+  dplyr::group_by(pat_id) |> 
+  dplyr::arrange(treatment_start_date) |> 
+  dplyr::mutate(attempt_num = dplyr::row_number()) |> 
+  dplyr::ungroup()
+
+attempt_model <- glm(
+  pregnant ~ age_group + attempt_num,
+  family = binomial,
+  data = df_attempt_recalc
+)
+
+attempt_summary <- summary(attempt_model)$coefficients
+kable(attempt_summary, digits = 3)
+```
+
+## Predicted Probability by Attempt
+```{r}
+attempt_predictions <- expand.grid(
+  age_group = levels(df$age_group),
+  attempt_num = 1:3
+)
+
+attempt_predictions$predicted_p <- predict(
+  attempt_model,
+  newdata = attempt_predictions,
+  type = "response"
+)
+
+attempt_predictions <- attempt_predictions |> 
+  arrange(age_group, attempt_num)
+
+kable(attempt_predictions, digits = 3)
+
+ggplot(attempt_predictions, aes(x = attempt_num, y = predicted_p, color = age_group)) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "Predicted Probability by Attempt Number",
+    x = "Attempt Number",
+    y = "Predicted Probability",
+    color = "Age Group"
+  )
+```
+
