@@ -48,10 +48,10 @@ treat_w_egg_and_embryo = treat_w_egg_and_embryo |>
 treat_w_egg_and_embryo |> 
   dplyr::count(pregnant)
 
-# Check what levels we have in treatment table.
-treat_by_pat_tx_cycle_ids |> 
-  dplyr::filter(live_birth_Derive == 'Outcome Live birth') |> 
-  dplyr::count(live_birth_Derive, pregnant, sort = T)
+# # Check what levels we have in treatment table.
+# treat_by_pat_tx_cycle_ids |> 
+#   dplyr::filter(live_birth_Derive == 'Outcome Live birth') |> 
+#   dplyr::count(live_birth_Derive, pregnant, sort = T)
 
 treat_w_egg_and_embryo |> 
   dplyr::filter(treatment == 'ICSI') |> 
