@@ -29,9 +29,22 @@ df <- df %>%
   ))
 
 df$age_group <- as.factor(df$age_group)
+
+length(unique(df$pat_id))
+# Number of unique PAT ids
+
 ```
 
 # Stats {.tabset}
+
+## Number of Unique Patients
+```{r}
+df |> 
+  dplyr::select(pat_id, age_group) |> 
+  dplyr::distinct() |> 
+  dplyr::count(age_group) |> 
+  knitr::kable()
+```
 
 ## Descriptive Pregnancy Rates
 ```{r}
@@ -214,6 +227,7 @@ if(!is.null(beta_binom_model)){
   print(coef_bb)
 } else {
   print("No coefficients can be extracted from binomial model due to above-noted model failure")
+  coef_bb = NULL
 }
 
 ```
@@ -250,3 +264,43 @@ insurance_metrics <- multi_cycle_dynamic %>%
 insurance_metrics |> 
   knitr::kable()
 ```
+
+```{r put_results_in_excel_file}
+# Create new workbook here in R
+my_wb = openxlsx::createWorkbook()
+
+# Add worksheets / tabs to excel file.
+openxlsx::addWorksheet(my_wb, 'desc_preg_rates')
+openxlsx::addWorksheet(my_wb, 'binom_logist_model')
+openxlsx::addWorksheet(my_wb, 'pred_probabilities')
+openxlsx::addWorksheet(my_wb, 'multi_cycle_succ')
+openxlsx::addWorksheet(my_wb, 'atmpt_lvl_model')
+openxlsx::addWorksheet(my_wb, 'pred_prob_by_atmpt')
+openxlsx::addWorksheet(my_wb, 'multi_cycle_var_prob')
+openxlsx::addWorksheet(my_wb, 'beta_binom_model')
+openxlsx::addWorksheet(my_wb, 'extract_beta_params')
+openxlsx::addWorksheet(my_wb, 'simul_actuar_outcomes')
+openxlsx::addWorksheet(my_wb, 'insurance_metrics')
+
+# Put results into each tab.
+openxlsx::writeData(my_wb, 'desc_preg_rates', pregnancy_rates)
+openxlsx::writeData(my_wb, 'binom_logist_model', logit_summary)
+openxlsx::writeData(my_wb, 'pred_probabilities', predicted_probs)
+openxlsx::writeData(my_wb, 'multi_cycle_succ', multi_cycle)
+openxlsx::writeData(my_wb, 'atmpt_lvl_model', attempt_summary)
+openxlsx::writeData(my_wb, 'pred_prob_by_atmpt', attempt_predictions)
+openxlsx::writeData(my_wb, 'multi_cycle_var_prob', multi_cycle_dynamic)
+openxlsx::writeData(my_wb, 'beta_binom_model', beta_binom_model)
+openxlsx::writeData(my_wb, 'extract_beta_params', coef_bb)
+openxlsx::writeData(my_wb, 'simul_actuar_outcomes', sim_results)
+openxlsx::writeData(my_wb, 'insurance_metrics', insurance_metrics)
+
+# Ensure each column is wide enough to hold its contents
+openxlsx::sheets(my_wb) |> 
+  purrr::iwalk( ~ {
+    openxlsx::setColWidths(my_wb, sheet = .x, cols = 1:10, widths = 'auto')
+  })
+
+openxlsx::saveWorkbook(my_wb, file = "outputs/model_1_results.xlsx", overwrite = T)
+```
+
