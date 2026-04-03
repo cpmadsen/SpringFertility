@@ -17,7 +17,7 @@ library(knitr)
 
 ```{r}
 df <- readr::read_rds("data/clean_data/cld_2022.rds") |> 
-  dplyr::rename(pregnant = pregnant_rev) |> 
+  dplyr::rename(pregnant = pregnant_bool) |> 
   dplyr::mutate(pregnant = ifelse(pregnant == "yes", 1, 0))
 
 df <- df %>%
@@ -26,7 +26,8 @@ df <- df %>%
     age >= 35 & age <= 37 ~ "35-37",
     age >= 38 & age <= 40 ~ "38-40",
     age >= 41 ~ "41+"
-  ))
+  )) %>% 
+  select(-age_bin)
 
 df$age_group <- as.factor(df$age_group)
 
