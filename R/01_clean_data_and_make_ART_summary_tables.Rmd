@@ -355,6 +355,6 @@ ggplotly(p)
 ```
 
 ```{r}
-
+readr::write_rds(cld_2022,"data/clean_data/cld_2022.rds")
 ```
 
