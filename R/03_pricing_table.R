@@ -15,24 +15,23 @@
 
 # - Bring in previous output:
 # Columns required:
-# - age_group | attempt | predicted_p
+# - age_group | attempt_num | predicted_p
 
 # Example structure (REPLACE WITH REAL MODEL OUTPUT)
-attempt_predictions <- data.frame(
-  age_group = rep(c("<35","35-37","38-40","41+"), each = 3),
-  attempt = rep(1:3, times = 4),
-  predicted_p = c(
-    0.45, 0.40, 0.35,   # <35
-    0.40, 0.35, 0.30,   # 35-37
-    0.30, 0.25, 0.20,   # 38-40
-    0.15, 0.12, 0.10    # 41+
-  )
-)
+# attempt_predictions <- data.frame(
+#   age_group = rep(c("<35","35-37","38-40","41+"), each = 3),
+#   attempt_num = rep(1:3, times = 4),
+#   predicted_p = c(
+#     0.45, 0.40, 0.35,   # <35
+#     0.40, 0.35, 0.30,   # 35-37
+#     0.30, 0.25, 0.20,   # 38-40
+#     0.15, 0.12, 0.10    # 41+
+#   )
+# )
 
 # IMPORTANT:
 # Replace this with actual model output:
-# attempt_predictions <- your_model_output
-
+attempt_predictions <- readr::read_csv("outputs/attempt_probabilities_by_age_long.csv")
 
 
 ##############################
@@ -109,7 +108,7 @@ library(dplyr)
 # Group probabilities by age
 age_results <- attempt_predictions %>%
   group_by(age_group) %>%
-  arrange(attempt) %>%
+  arrange(attempt_num) %>%
   summarize(
     p_vec = list(predicted_p),
     .groups = "drop"
@@ -177,4 +176,4 @@ print(presentation_table)
 # 6.  EXPORT TO CSV
 ##############################
 
-# write.csv(presentation_table, "ivf_pricing_by_age_and_cycles.csv", row.names = FALSE)
+write.csv(presentation_table, "outputs/ivf_pricing_by_age_and_cycles.csv", row.names = FALSE)
