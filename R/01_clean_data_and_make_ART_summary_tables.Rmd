@@ -31,10 +31,10 @@ add_filter_step = function(rct, dat, desc){
 
 ```{r load_in_data_and_make_full_table}
 # Import dataset.
-treat = readr::read_csv("Data/Branch Care/Data/treatment_table_20260203 Adam Walter.csv") |> 
+treat = readr::read_csv("data/Branch Care/Data/treatment_table_20260203 Adam Walter.csv") |> 
   dplyr::select(-pregnant)
-str_egg = readr::read_csv("Data/Branch Care/Data/structured_egg_table_20260130 Adam Walter.csv")
-raw_embryo_tbl = readr::read_csv("Data/Branch Care/Data/MLData_Nov25 Adam Walter/Embryo.csv")
+str_egg = readr::read_csv("data/Branch Care/Data/structured_egg_table_20260130 Adam Walter.csv")
+raw_embryo_tbl = readr::read_csv("data/Branch Care/Data/MLData_Nov25 Adam Walter/Embryo.csv")
 
 # Remove extraneous columns in common with treatment table.
 str_egg = str_egg |>
