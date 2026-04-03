@@ -13,6 +13,7 @@ library(dplyr)
 library(ggplot2)
 library(VGAM)
 library(knitr)
+library(tidyr)
 ```
 
 ```{r}
@@ -166,6 +167,13 @@ ggplot(attempt_predictions, aes(x = attempt_num, y = predicted_p, color = age_gr
     y = "Predicted Probability",
     color = "Age Group"
   )
+
+attempt_predictions %>% readr::write_csv("outputs/attempt_probabilities_by_age_long.csv")
+
+attempt_predictions_wide <- attempt_predictions %>% 
+  tidyr::pivot_wider(names_from = attempt_num, values_from = predicted_p)
+
+attempt_predictions_wide %>% readr::write_csv("outputs/attempt_probabilities_by_age_wide.csv")
 ```
 
 
