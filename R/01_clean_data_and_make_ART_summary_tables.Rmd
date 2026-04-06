@@ -160,14 +160,22 @@ cld <- cld %>%
          pregnant_bool,
          birth_bool)
 
-cld_2022 = cld |> 
-  dplyr::filter(lubridate::year(treatment_start_date) == 2022) |> 
+cld_2022 = cld |>
+  dplyr::filter(lubridate::year(treatment_start_date) == 2022) |>
   dplyr::filter(!duplicated(tx_cycle))
+
+# row_count_tbl = add_filter_step(row_count_tbl, cld_full, "Filtering to treatments in 2022 (one row per cycle)")
+
+# Instead of filtering for 2022, include all data years (Change in approach as of 4/6/26)
+cld_full = cld |> 
+  dplyr::filter(!duplicated(tx_cycle))
+
+row_count_tbl = add_filter_step(row_count_tbl, cld_full, "Filtering out duplicate tx_cycle values (one row per cycle)")
+
 
 # cld |> 
 #   dplyr::count(pat_id, attempt, sort = T)
 
-row_count_tbl = add_filter_step(row_count_tbl, cld_2022, "Filtering to treatments in 2022 (one row per cycle)")
 
 ```
 
@@ -195,11 +203,11 @@ cld |>
 ```{r clean_up_infertility_diagnosis_column}
 # cat("\nBefore cleaning up the primary_infertility_diagnosis column, it has these levels: ")
 
-cld_2022 |> 
+cld_full |> 
   dplyr::count(primary_infertility_diagnosis, sort = T) |> 
   DT::datatable()
 
-cld_2022 = cld_2022 |> 
+cld_full = cld_full |> 
   dplyr::mutate(primary_infertility_diagnosis_cl = dplyr::case_when(
     stringr::str_detect(primary_infertility_diagnosis,'Tubal') ~ "Tubal factor",
     stringr::str_detect(primary_infertility_diagnosis,'Uterine') ~ "Uterine factor",
@@ -217,7 +225,7 @@ cld_2022 = cld_2022 |>
 ```{r}
 # cat("\nAfter cleaning, it has these levels: ")
 
-cld_2022 |> 
+cld_full |> 
   dplyr::count(primary_infertility_diagnosis_cl, sort = T) |> 
   DT::datatable()
 ```
@@ -228,11 +236,11 @@ cld_2022 |>
 
 # cat("\nBefore cleaning up the secondary_infertility_diagnosis column, it has these levels: ")
 
-cld_2022 |> 
+cld_full |> 
   dplyr::count(secondary_infertility_diagnosis, sort = T) |> 
   DT::datatable()
 
-cld_2022 = cld_2022 |> 
+cld_full = cld_full |> 
   dplyr::mutate(secondary_infertility_diagnosis_cl = dplyr::case_when(
     stringr::str_detect(secondary_infertility_diagnosis,'Tubal') ~ "Tubal factor",
     stringr::str_detect(secondary_infertility_diagnosis,'Uterine') ~ "Uterine factor",
@@ -251,11 +259,11 @@ cld_2022 = cld_2022 |>
 
 # cat("\nAfter cleaning, it has these levels: ")
 
-cld_2022 |> 
+cld_full |> 
   dplyr::count(secondary_infertility_diagnosis_cl, sort = T) |> 
   DT::datatable()
 
-just_secondary = cld_2022 |> 
+just_secondary = cld_full |> 
   dplyr::filter(is.na(primary_infertility_diagnosis_cl), !is.na(secondary_infertility_diagnosis_cl))
 
 cat(paste0("\n",nrow(just_secondary)," patients have info for the secondary diagnosis but not the first."))
@@ -269,36 +277,36 @@ To compare with published ART tables for Spring Fertility here: https://art.cdc.
 ### Cycle-level Summaries
 ```{r}
 
-cld_2022 = cld_2022 |> 
+cld_full = cld_full |> 
   dplyr::mutate(pregnant_bool = ifelse(pregnant_bool == 1, "yes", "no"),
                 birth_bool = ifelse(birth_bool == 1, "yes", "no"))
 
-cld_2022 |> 
+cld_full |> 
   dplyr::count(treatment) |> 
   knitr::kable()
 
-cld_2022 |> 
+cld_full |> 
   dplyr::count(treatment, pregnant_bool) |> 
   knitr::kable()
 
-cld_2022 |> 
+cld_full |> 
   dplyr::mutate(diagnoses_involve_adv_mat_age = primary_infertility_diagnosis_cl == "Advanced Maternal Age" | secondary_infertility_diagnosis_cl == "Advanced Maternal Age") |> 
   dplyr::count(diagnoses_involve_adv_mat_age) |> 
   knitr::kable()
 
-cld_2022_sum_tbl = cld_2022 |> 
+cld_full_sum_tbl = cld_full |> 
   dplyr::mutate(fresh_embryo = num_2pn_from_fresh_eggs > 0,
                 frozen_embryo = num_2pn_from_frozen_eggs > 0) |> 
   dplyr::count(donated,fresh_embryo,frozen_embryo,pregnant_bool,birth_bool)
 
-cld_2022_sum_tbl |> 
+cld_full_sum_tbl |> 
   knitr::kable()
 
-cld_2022_sum_tbl |> 
+cld_full_sum_tbl |> 
   dplyr::count(fresh_embryo, frozen_embryo, pregnant_bool, wt = n) |> 
   knitr::kable()
 
-cld_2022 |> 
+cld_full |> 
   dplyr::count(birth_bool) |> 
   knitr::kable()
 # cld_2022 %>%
@@ -316,7 +324,7 @@ cld_2022 |>
 
 ### Age of Patient Histogram
 ```{r}
-p = cld_2022 |> 
+p = cld_full |> 
   dplyr::group_by(pat_id) |> 
   dplyr::slice(1) |> 
   dplyr::ungroup() |> 
@@ -355,6 +363,6 @@ ggplotly(p)
 ```
 
 ```{r}
-readr::write_rds(cld_2022,"data/clean_data/cld_2022.rds")
+readr::write_rds(cld_full,"data/clean_data/cld_full.rds")
 ```
 
