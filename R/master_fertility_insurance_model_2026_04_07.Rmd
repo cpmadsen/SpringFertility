@@ -1,0 +1,446 @@
+---
+title: "Insurance Modeling Analysis"
+author: "Charm Economics"
+date: "`r Sys.Date()`"
+output: 
+  rmdformats::downcute
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+library(dplyr)
+library(ggplot2)
+library(VGAM)
+library(pROC)
+library(ResourceSelection)
+library(knitr)
+library(tidyr)
+set.seed(123)
+```
+
+```{r include=F}
+df <- readr::read_rds("data/clean_data/cld_filtered.rds") |> 
+  dplyr::rename(pregnant = pregnant_bool) |> 
+  dplyr::mutate(pregnant = ifelse(pregnant == "yes", 1, 0))
+
+# Also read in the egg table.
+egg_df = readr::read_csv("data/Branch Care/Data/structured_egg_table_20260130 Adam Walter.csv")
+embryo_df = readr::read_csv("data/Branch Care/Data/MLData_Nov25 Adam Walter/Embryo.csv")
+
+egg_df <- egg_df %>%
+  mutate(
+    ever_thaw = if_any(starts_with("thaw_day_"), ~ coalesce(. == TRUE, FALSE))
+  )
+
+# # Pull thawed_oocyte column to our egg_df
+# egg_df |> 
+#   dplyr::left_join(
+#     embryo_df |> 
+#   dplyr::select(pat_id, egg_id, thawed_oocyte) |> 
+#   dplyr::distinct()
+#   )
+
+# Join on the 'ever_thaw' to our cycle-level data.
+df = df |> 
+  dplyr::left_join(
+    egg_df |> 
+      dplyr::select(pat_id, tx_id, ever_thaw) |> 
+      dplyr::group_by(pat_id, tx_id) |> 
+      dplyr::reframe(ever_thaw = sum(ever_thaw) > 0) |> 
+      dplyr::distinct()
+  ) |> 
+  dplyr::mutate(ever_thaw = tidyr::replace_na(ever_thaw, FALSE))
+
+# Subset data for thaws/frozen
+
+
+df <- df %>%
+  mutate(age_group = case_when(
+    age < 35 ~ "<35",
+    age >= 35 & age <= 37 ~ "35-37",
+    age >= 38 & age <= 40 ~ "38-40",
+    age >= 41 ~ "41+"
+  )) %>% 
+  select(-age_bin)
+
+df$age_group <- as.factor(df$age_group)
+
+# length(unique(df$pat_id))
+# Number of unique PAT ids
+df = df |> dplyr::mutate(the_year = lubridate::year(treatment_start_date))
+
+```
+
+```{r data_cleaning_inputs_and_functions}
+##################################################################
+# MASTER FERTILITY INSURANCE MODEL CODE - With Model Validation
+##################################################################
+
+############################################################
+# 0. FINANCIAL INPUTS
+############################################################
+
+#Can adjust these based off of feedback from Spring
+cost_per_cycle <- 12000
+payout_amount <- 25000
+risk_margin <- 0.20
+admin_load <- 0.10
+n_sim <- 5000
+
+############################################################
+# 1. TREATMENT COURSE DEFINITION
+############################################################
+
+df <- df %>%
+  arrange(pat_id, treatment_start_date) %>%
+  group_by(pat_id) %>%
+  mutate(
+    days_since_last = as.numeric(treatment_start_date - lag(treatment_start_date)),
+    new_course = ifelse(is.na(days_since_last) | days_since_last > 365, 1, 0),
+    treatment_course_id = cumsum(new_course)
+  ) %>%
+  ungroup()
+
+
+
+############################################################
+# 2. MODEL VALIDATION FUNCTION
+############################################################
+# To validate the models, we should review:
+# TEST:
+# - AUC: discrimination ability
+#     >0.7 = acceptable
+#     >0.8 = strong
+# - Calibration: predicted ≈ observed
+# - Dispersion:
+#   dispersion = residual deviance / degrees of freedom
+#   Overdispersion = variance > expected under binomial
+# INTERPRETATION:
+#   ~1.0 → OK (binomial fine)
+#   1.0–1.5 → mild overdispersion
+#   >1.5 = overdispersion → consider quasibinomial
+#
+# WHY IT MATTERS:
+#   If ignored → standard errors underestimated → overconfidence
+#
+# WHAT TO DO:
+#   If dispersion > 1.5 → switch to quasibinomial
+#   If ~1 → revert to binomial
+
+validate_model <- function(model, data, outcome_var) {
+
+  pred <- predict(model, type = "response")
+
+  # ROC / AUC
+  roc_obj <- roc(data[[outcome_var]], pred)
+  auc_val <- auc(roc_obj)
+
+  # Calibration
+  data$pred_bin <- cut(pred, breaks = 10)
+  calib <- data %>%
+    group_by(pred_bin) %>%
+    summarise(
+      predicted = mean(pred),
+      observed = mean(.data[[outcome_var]]),
+      .groups = "drop"
+    )
+
+  # Dispersion
+  dispersion <- sum(residuals(model, type = "pearson")^2) / model$df.residual
+
+  print(paste("AUC:", round(auc_val, 3)))
+  print(paste("Dispersion:", round(dispersion, 3)))
+  print("Calibration Table:")
+  print(calib)
+
+  return(list(auc = auc_val, dispersion = dispersion))
+}
+
+
+
+############################################################
+# 3. MONTE CARLO SIMULATION FUNCTION
+############################################################
+# Simulates patient outcomes and cost distribution
+
+run_simulation <- function(p_vec, cost, payout, n_sim) {
+
+  sim_costs <- replicate(n_sim, {
+
+    p <- sample(p_vec, 1)
+    outcome <- rbinom(1, 1, p)
+
+    payout_cost <- ifelse(outcome == 1, 0, payout)
+    total_cost <- cost + payout_cost
+
+    return(total_cost)
+  })
+
+  return(sim_costs)
+}
+
+
+
+############################################################
+# 4. PRICING FUNCTION
+############################################################
+
+calc_pricing <- function(costs) {
+  data.frame(
+    expected_cost = mean(costs),
+    var_95 = quantile(costs, 0.95), # tail risk
+    premium = mean(costs) * (1 + risk_margin + admin_load)
+  )
+}
+```
+
+```{r clinical_pregnancy_model}
+############################################################
+#  MODEL 1: CLINICAL PREGNANCY (BETA-BINOMIAL)
+############################################################
+# NOTE:
+# No AUC here because this is distribution-based (not single prediction)
+
+clinical_patient <- df %>%
+  group_by(pat_id) %>%
+  summarise(
+    successes = sum(pregnant),
+    attempts = n(),
+    age = first(age),
+    .groups = "drop"
+  )
+
+bb_model <- tryCatch(
+  expr = {
+    vglm(
+  cbind(successes, attempts - successes) ~ age,
+  betabinomialff,
+  data = clinical_patient
+)
+  }, 
+error = function(e) return(NULL)
+)
+
+if(!is.null(bb_model)){
+  
+  print("Beta-binomial model worked!")
+  
+  # Extract mu + rho → alpha/beta
+  mu <- fitted(bb_model)
+  rho <- Coef(bb_model)["rho"]
+  
+  clinical_patient <- clinical_patient %>%
+    mutate(
+      alpha = mu * ((1 - rho) / rho),
+      beta  = (1 - mu) * ((1 - rho) / rho)
+    )
+  
+  # We should check:
+  # - alpha, beta > 0
+  # - alpha+beta magnitude (variance indicator)
+  
+  alpha_c <- mean(clinical_patient$alpha)
+  beta_c  <- mean(clinical_patient$beta)
+  
+  clinical_p <- rbeta(n_sim, alpha_c, beta_c)
+  
+  clinical_costs <- run_simulation(
+    clinical_p,
+    cost_per_cycle,
+    payout_amount,
+    n_sim
+  )
+  
+  clinical_results <- calc_pricing(clinical_costs)
+
+} else {
+  # Welp, the vglm model didn't work. Try using quasi-binomial.
+  print("Beta-binomial model didn't work here - falling back to Quasibinomial model")
+  
+  quasi_binom_model <- tryCatch(
+    expr = {
+      glm(
+        cbind(successes, attempts - successes) ~ age_group,
+        family = quasibinomial,
+        data = clinical_patient
+      )
+    },
+    error = function(e) return(NULL)
+  )
+  
+  if(is.null(quasi_binom_model)) cat("\nQuasibinomial model failed to resolve...")
+  
+  summary(quasi_binom_model)
+  
+  # Convert to dataframe.
+  quasi_binom_model_summary = coef(summary(quasi_binom_model)) |> 
+    as.data.frame()
+  
+  # Retrieve alpha and beta (shape parameters)
+  if(!is.null(quasi_binom_model)){
+    coef_qb <- coef(quasi_binom_model)
+    
+    print(coef_qb)
+  } else {
+    print("No coefficients can be extracted from binomial model due to above-noted model failure")
+    coef_qb = NULL
+  }
+  
+  sim_results <- patient_summary %>%
+    rowwise() %>%
+    mutate(
+      simulated_p = rbeta(1, shape1 = 2, shape2 = 5), # example params
+      success_sim = rbinom(1, size = attempts, prob = simulated_p)
+    )
+  
+}
+
+```
+
+## Euploid Embryo (Binomial or Quasibinomial)
+
+```{r}
+############################################################
+#  MODEL 2: EUPLOID EMBRYO (BINOMIAL → QUASIBINOMIAL IF NEEDED)
+############################################################
+
+egg_df = egg_df |> 
+  dplyr::mutate(age_group = case_when(
+    age < 35 ~ "<35",
+    age >= 35 & age <= 37 ~ "35-37",
+    age >= 38 & age <= 40 ~ "38-40",
+    age >= 41 ~ "41+"
+  )
+)
+
+euploid_summary = egg_df |>
+  dplyr::mutate(success = pgd_clinresult %in% c("Euploid","Normal") & !is.na(pgd_clinresult)) |> 
+  group_by(pat_id) |>
+  summarise(
+    successes = sum(success),
+    number_of_eggs_attempted = n(),
+    age = first(age),
+    age_group = first(age_group),
+    .groups = "drop"
+  )
+
+euploid_model <- glm(
+  successes ~ age + number_of_eggs_attempted,
+  family = binomial,
+  data = euploid_summary
+)
+
+val <- validate_model(euploid_model, df, "euploid_success")
+
+# Overdispersion rule:
+if (val$dispersion > 1.5) {
+  message("Switching to quasibinomial due to overdispersion")
+
+  euploid_model <- glm(
+    euploid_success ~ age + eggs_retrieved,
+    family = quasibinomial,
+    data = df
+  )
+}
+
+df$euploid_p <- predict(euploid_model, type = "response")
+
+euploid_costs <- run_simulation(
+  df$euploid_p,
+  cost_per_cycle,
+  payout_amount,
+  n_sim
+)
+
+euploid_results <- calc_pricing(euploid_costs)
+
+
+
+############################################################
+#  MODEL 3: SINGLE-CYCLE EGG MODEL (BINOMIAL)
+############################################################
+
+threshold_single <- 7
+
+df <- df %>%
+  mutate(egg_success = ifelse(eggs_retrieved >= threshold_single, 1, 0))
+
+egg_model <- glm(
+  egg_success ~ age + amh,
+  family = binomial,
+  data = df
+)
+
+validate_model(egg_model, df, "egg_success")
+
+df$egg_p <- predict(egg_model, type = "response")
+
+egg_costs <- run_simulation(
+  df$egg_p,
+  cost_per_cycle,
+  payout_amount,
+  n_sim
+)
+
+egg_results <- calc_pricing(egg_costs)
+
+
+
+############################################################
+#  MODEL 4: TWO-CYCLE EGG MODEL (BINOMIAL)
+############################################################
+
+threshold_two <- 15
+
+patient_summary <- df %>%
+  group_by(pat_id, treatment_course_id) %>%
+  summarise(
+    total_eggs = sum(eggs_retrieved),
+    eggs_cycle1 = eggs_retrieved[1],
+    age = first(age),
+    amh = first(amh),
+    .groups = "drop"
+  ) %>%
+  mutate(success = ifelse(total_eggs >= threshold_two, 1, 0))
+
+two_model <- glm(
+  success ~ age + amh + eggs_cycle1,
+  family = binomial,
+  data = patient_summary
+)
+
+validate_model(two_model, patient_summary, "success")
+
+patient_summary$two_p <- predict(two_model, type = "response")
+
+two_costs <- run_simulation(
+  patient_summary$two_p,
+  2 * cost_per_cycle,
+  payout_amount,
+  n_sim
+)
+
+two_results <- calc_pricing(two_costs)
+
+
+
+############################################################
+# 9. FINAL OUTPUT
+############################################################
+
+final_results <- bind_rows(
+  clinical_results %>% mutate(model = "Clinical Pregnancy"),
+  euploid_results %>% mutate(model = "Euploid Embryo"),
+  egg_results %>% mutate(model = "Single Cycle Egg"),
+  two_results %>% mutate(model = "Two Cycle Egg")
+)
+
+print(final_results)
+
+############################################################
+# END
+############################################################
+```
+

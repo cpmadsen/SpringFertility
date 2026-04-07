@@ -146,6 +146,7 @@ cld_filtered <- cld %>%
          donated,
          num_eggs_collected,
          total_fertilized,
+         thawed_oocyte,
          num_m2_eggs,
          num_2pn_from_fresh_eggs,
          num_2pn_from_frozen_eggs,

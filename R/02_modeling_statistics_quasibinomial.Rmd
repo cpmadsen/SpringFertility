@@ -25,6 +25,37 @@ df <- readr::read_rds("data/clean_data/cld_filtered.rds") |>
   dplyr::rename(pregnant = pregnant_bool) |> 
   dplyr::mutate(pregnant = ifelse(pregnant == "yes", 1, 0))
 
+# Also read in the egg table.
+egg_df = readr::read_csv("data/Branch Care/Data/structured_egg_table_20260130 Adam Walter.csv")
+embryo_df = readr::read_csv("data/Branch Care/Data/MLData_Nov25 Adam Walter/Embryo.csv")
+
+egg_df <- egg_df %>%
+  mutate(
+    ever_thaw = if_any(starts_with("thaw_day_"), ~ coalesce(. == TRUE, FALSE))
+  )
+
+# # Pull thawed_oocyte column to our egg_df
+# egg_df |> 
+#   dplyr::left_join(
+#     embryo_df |> 
+#   dplyr::select(pat_id, egg_id, thawed_oocyte) |> 
+#   dplyr::distinct()
+#   )
+
+# Join on the 'ever_thaw' to our cycle-level data.
+df = df |> 
+  dplyr::left_join(
+    egg_df |> 
+      dplyr::select(pat_id, tx_id, ever_thaw) |> 
+      dplyr::group_by(pat_id, tx_id) |> 
+      dplyr::reframe(ever_thaw = sum(ever_thaw) > 0) |> 
+      dplyr::distinct()
+  ) |> 
+  dplyr::mutate(ever_thaw = tidyr::replace_na(ever_thaw, FALSE))
+
+# Subset data for thaws/frozen
+
+
 df <- df %>%
   mutate(age_group = case_when(
     age < 35 ~ "<35",
@@ -38,6 +69,13 @@ df$age_group <- as.factor(df$age_group)
 
 # length(unique(df$pat_id))
 # Number of unique PAT ids
+df = df |> dplyr::mutate(the_year = lubridate::year(treatment_start_date))
+
+
+# TODO: Check the following logic with Lara - 
+df_frozen = df |> 
+  # dplyr::filter(num_2pn_from_frozen_eggs != 0)
+  dplyr::filter(ever_thaw)
 
 ```
 
@@ -78,7 +116,13 @@ ggplot(pregnancy_rates, aes(x = age_group, y = pregnancy_rate)) +
 
 # Patient-level Statistical Models {.tabset}
 
-## Binomial Logistic Model
+## Binomial Logistic Model {.tabset}
+
+### Just by Age group
+
+The model is this:
+
+$pregant \sim agegroup$
 
 ```{r}
 logit_model <- glm(
@@ -87,8 +131,26 @@ logit_model <- glm(
   data = df
 )
 
+
 logit_summary <- summary(logit_model)$coefficients
 kable(logit_summary, digits = 3)
+```
+
+### Multiple Predictor Variables
+
+The model is this:
+
+$pregant \sim agegroup + amh + afc+ bmi$
+
+```{r}
+logit_model_more_vars <- glm(
+  pregnant ~ age_group + amh + afc + bmi,
+  family = binomial(link = "logit"),
+  data = df
+)
+
+logit_more_vars_summary <- summary(logit_model_more_vars)$coefficients
+kable(logit_more_vars_summary, digits = 3)
 ```
 
 ## Predicted Probabilities
@@ -99,7 +161,17 @@ predicted_probs <- df %>%
   mutate(predicted_p = predict(logit_model, newdata = ., type = "response")) |> 
   dplyr::arrange(age_group)
 
+# Try this for equation with more predictor vars
+predicted_probs_more_vars = df %>%
+  dplyr::distinct(age_group, bmi, amh, afc) %>%
+  dplyr::filter(!is.na(afc)) %>%
+  mutate(predicted_p = predict(logit_model_more_vars, newdata = ., type = "response")) |>
+  dplyr::arrange(age_group)
+
+# ggplot(predicted_probs_frozen) + geom_histogram(aes(predicted_p))
+
 kable(predicted_probs, digits = 3)
+kable(predicted_probs_more_vars, digits = 3)
 
 ggplot(predicted_probs, aes(x = age_group, y = predicted_p)) +
   geom_point(size = 3) +
@@ -111,9 +183,74 @@ ggplot(predicted_probs, aes(x = age_group, y = predicted_p)) +
   )
 ```
 
+## Compare Results with Branch's Calculator
+
+Here are the inputs we used for Branch Calculator:
+
+```{r find_averages_for_calculator}
+# Filter dataset for people with frozen eggs.
+calc_inputs = df |> 
+  dplyr::group_by(age_group) |> 
+  dplyr::reframe(
+    median_bmi = median(bmi,na.rm=T),
+    median_age = median(age,na.rm=T),
+    median_amh = median(amh,na.rm=T),
+    median_afc = median(afc,na.rm=T)
+  )
+
+calc_inputs |> 
+  knitr::kable()
+```
+
+![](images/branch_calculator_example_results.JPG)
+
+Here are the predicted probabilities based on our cycle-level dataset, using this model
+
+$pregant \sim agegroup + amh + afc+ bmi$
+
+```{r}
+
+# one_cycle_probs = predicted_probs_frozen |> 
+#   dplyr::group_by(age_group) |> 
+#   dplyr::reframe(median_predicted_prob = median(predicted_p,na.rm=T))
+
+N <- 1
+
+one_cycle_probs <- predicted_probs_more_vars %>%
+  mutate(
+    success_N_cycles = 1 - (1 - predicted_p)^N,
+    failure_N_cycles = (1 - predicted_p)^N
+  )
+
+N <- 2
+
+two_cycle_probs <- predicted_probs_more_vars %>%
+  mutate(
+    success_N_cycles = 1 - (1 - predicted_p)^N,
+    failure_N_cycles = (1 - predicted_p)^N
+  )
+
+one_cycle_tbl = one_cycle_probs |> 
+  dplyr::group_by(age_group) |> 
+  dplyr::reframe(median_predicted_prob = mean(success_N_cycles,na.rm=T)) |> 
+  dplyr::mutate(cycle_attempts = 1)
+  
+two_cycle_tbl = two_cycle_probs |> 
+  dplyr::group_by(age_group) |> 
+  dplyr::reframe(median_predicted_prob = mean(success_N_cycles,na.rm=T)) |> 
+  dplyr::mutate(cycle_attempts = 2)
+
+one_cycle_tbl |> 
+  dplyr::bind_rows(
+    two_cycle_tbl
+) |> 
+  knitr::kable()
+```
+
 ## Multi-Cycle Success (Insurance View)
 
 ```{r}
+# One cycle 
 N <- 3
 
 multi_cycle <- predicted_probs %>%
@@ -206,7 +343,7 @@ multi_cycle_dynamic |>
 
 ```
 
-## Beta-binomial Model (Actuarial model)
+## Quasi-binomial Model (Actuarial model)
 
 ```{r}
 # Account for patient heterogeneity and overdispersion
@@ -222,24 +359,24 @@ patient_summary <- df %>%
 
 table(patient_summary$age_group)
 
-# Fit beta-binomial model
-beta_binom_model <- tryCatch(
+# Fit quasibinomial model
+quasi_binom_model <- tryCatch(
   expr = {
-    vglm(
+    glm(
       cbind(successes, attempts - successes) ~ age_group,
-      betabinomialff,
+      family = quasibinomial,
       data = patient_summary
     )
   },
   error = function(e) return(NULL)
 )
 
-if(is.null(beta_binom_model)) cat("\nBeta Binomial model failed to resolve...")
+if(is.null(quasi_binom_model)) cat("\nBeta Binomial model failed to resolve...")
 
-summary(beta_binom_model)
+summary(quasi_binom_model)
 
 # Convert to dataframe.
-beta_binom_model_summary = coef(summary(beta_binom_model)) |> 
+quasi_binom_model_summary = coef(summary(quasi_binom_model)) |> 
   as.data.frame()
 
 ```
@@ -248,13 +385,13 @@ beta_binom_model_summary = coef(summary(beta_binom_model)) |>
 
 ```{r}
 # Retrieve alpha and beta (shape parameters)
-if(!is.null(beta_binom_model)){
-  coef_bb <- coef(beta_binom_model)
+if(!is.null(quasi_binom_model)){
+  coef_qb <- coef(quasi_binom_model)
 
-  print(coef_bb)
+  print(coef_qb)
 } else {
   print("No coefficients can be extracted from binomial model due to above-noted model failure")
-  coef_bb = NULL
+  coef_qb = NULL
 }
 
 ```
@@ -271,7 +408,6 @@ sim_results <- patient_summary %>%
     simulated_p = rbeta(1, shape1 = 2, shape2 = 5), # example params
     success_sim = rbinom(1, size = attempts, prob = simulated_p)
 )
-
 
 sim_results |> 
   DT::datatable()
@@ -417,11 +553,11 @@ run_simulation <- function(p_vec, cost, payout, n_sim) {
 
 ```
 
-## Euploid Embryo Model (Beta-binomial)
+## Euploid Embryo Model (Quasibinomial)
 
 ```{r}
 ############################################################
-# 1. EUPLOID EMBRYO MODEL (BETA-BINOMIAL)
+# 1. EUPLOID EMBRYO MODEL (QUASI-BINOMIAL)
 ############################################################
 
 # Aggregate to patient-level counts
@@ -436,13 +572,21 @@ euploid_summary = egg_df |>
     .groups = "drop"
   )
 
-euploid_bb <- vglm(
+# euploid_bb <- vglm(
+#   cbind(successes, number_of_eggs_attempted - successes) ~ age,
+#   betabinomialff,
+#   data = euploid_summary
+# )
+euploid_bb = glm(
   cbind(successes, number_of_eggs_attempted - successes) ~ age,
-  betabinomialff,
+  family = quasibinomial,
   data = euploid_summary
 )
 
-coef_bb <- Coef(euploid_bb)
+quasi_binom_model_summary = coef(summary(euploid_bb)) |>
+  as.data.frame()
+
+coef_bb <- coef(quasi_binom_model)
 
 alpha <- exp(coef_bb[1])
 beta <- exp(coef_bb[2])
@@ -623,6 +767,7 @@ two_results <- calc_pricing(two_costs)
 ```
 
 ## Final Comparison
+
 ```{r}
 
 # final_results <- dplyr::bind_rows(
@@ -667,8 +812,8 @@ openxlsx::addWorksheet(my_wb, 'multi_cycle_succ')
 openxlsx::addWorksheet(my_wb, 'atmpt_lvl_model')
 openxlsx::addWorksheet(my_wb, 'pred_prob_by_atmpt')
 openxlsx::addWorksheet(my_wb, 'multi_cycle_var_prob')
-openxlsx::addWorksheet(my_wb, 'beta_binom_model')
-openxlsx::addWorksheet(my_wb, 'extract_beta_params')
+openxlsx::addWorksheet(my_wb, 'quasi_binom_model')
+openxlsx::addWorksheet(my_wb, 'extract_params')
 openxlsx::addWorksheet(my_wb, 'simul_actuar_outcomes')
 openxlsx::addWorksheet(my_wb, 'insurance_metrics')
 openxlsx::addWorksheet(my_wb, 'final_comparison')
@@ -681,8 +826,8 @@ openxlsx::writeData(my_wb, 'multi_cycle_succ', multi_cycle)
 openxlsx::writeData(my_wb, 'atmpt_lvl_model', attempt_summary)
 openxlsx::writeData(my_wb, 'pred_prob_by_atmpt', attempt_predictions)
 openxlsx::writeData(my_wb, 'multi_cycle_var_prob', multi_cycle_dynamic)
-openxlsx::writeData(my_wb, 'beta_binom_model', beta_binom_model_summary)
-openxlsx::writeData(my_wb, 'extract_beta_params', coef_bb)
+openxlsx::writeData(my_wb, 'quasi_binom_model', quasi_binom_model_summary)
+openxlsx::writeData(my_wb, 'extract_params', coef_bb)
 openxlsx::writeData(my_wb, 'simul_actuar_outcomes', sim_results)
 openxlsx::writeData(my_wb, 'insurance_metrics', insurance_metrics)
 openxlsx::writeData(my_wb, 'final_comparison', final_results)
