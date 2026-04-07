@@ -220,22 +220,51 @@ table(patient_summary$age_group)
 
 # Fit beta-binomial model
 beta_binom_model <- tryCatch(
-  expr = {
+  {
     vglm(
       cbind(successes, attempts - successes) ~ age_group,
       betabinomialff,
       data = patient_summary
     )
   },
-  error = function(e) return(NULL)
+  error = function(e) {
+    message("Model failed: ", conditionMessage(e))
+    return(NULL)
+  }
 )
 
-if(is.null(beta_binom_model)) cat("\nBeta Binomial model failed to resolve...")
+beta_binom_model_2plus <- VGAM::vglm(
+  cbind(successes, failures) ~ age_group,
+  VGAM::betabinomialff(ishape1 = 1, ishape2 = 1, zero = 2),
+  data = patient_summary_2plus
+)
+
+patient_summary <- patient_summary %>%
+  mutate(age_group = factor(age_group, levels = c("<35", "35-37", "38-40", "41+")))
+
+patient_summary %>%
+  group_by(age_group) %>%
+  summarize(
+    n = n(),
+    mean_attempts = mean(attempts),
+    max_attempts = max(attempts),
+    all_fail = sum(successes == 0),
+    all_success = sum(successes == attempts),
+    partial_success = sum(successes > 0 & successes < attempts)
+  )
+#install.packages("aod")
+library(aod)
+
+beta_binom_model <- betabin(
+  cbind(successes, attempts - successes) ~ age_group,
+  ~ 1,
+  data = patient_summary
+)
 
 summary(beta_binom_model)
 
-# Convert to dataframe.
-beta_binom_model_summary = coef(summary(beta_binom_model)) |> 
+# Convert fixed-effect coefficient table to a data frame
+beta_binom_model_summary <- summary(beta_binom_model)@Coef |>
   as.data.frame()
 
 ```
