@@ -21,7 +21,7 @@ set.seed(123)
 ```
 
 ```{r include=F}
-df <- readr::read_rds("data/clean_data/cld_2022.rds") |> 
+df <- readr::read_rds("data/clean_data/cld_filtered.rds") |> 
   dplyr::rename(pregnant = pregnant_bool) |> 
   dplyr::mutate(pregnant = ifelse(pregnant == "yes", 1, 0))
 
