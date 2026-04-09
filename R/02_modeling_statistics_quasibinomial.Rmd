@@ -29,10 +29,23 @@ df <- readr::read_rds("data/clean_data/cld_filtered.rds") |>
 egg_df = readr::read_csv("data/Branch Care/Data/structured_egg_table_20260130 Adam Walter.csv")
 embryo_df = readr::read_csv("data/Branch Care/Data/MLData_Nov25 Adam Walter/Embryo.csv")
 
+## LOOK AT cryo_day 5, 6, or 7. If it's true for any of those days, that's a frozen embryo.
+## FILTER out rows where we have cryo_day on day 2 or 3.
+
+# WAS AN EGG FROZEN? Look at cryo_day_0 - if its not NULL/NA, then its a frozen egg.
+
 egg_df <- egg_df %>%
+  # Drop rows where cryo_day is 2 or 3.
+  dplyr::filter(!(cryo_day_2 & cryo_day_3)) |> 
+  dplyr::mutate(
+    frozen_egg = cryo_day_0
+  ) |> 
   mutate(
-    ever_thaw = if_any(starts_with("thaw_day_"), ~ coalesce(. == TRUE, FALSE))
+    frozen_embryo = if_any(.cols = c('cryo_day_5','cryo_day_6','cryo_day_7'), ~ coalesce(. == TRUE, FALSE))
   )
+  # mutate(
+  #   ever_thaw = if_any(starts_with("thaw_day_"), ~ coalesce(. == TRUE, FALSE))
+  # )
 
 # # Pull thawed_oocyte column to our egg_df
 # egg_df |> 
