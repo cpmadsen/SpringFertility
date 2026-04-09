@@ -114,6 +114,53 @@ ggplot(pregnancy_rates, aes(x = age_group, y = pregnancy_rate)) +
 
 ```
 
+## Dataset Date Range
+```{r}
+df |> 
+  dplyr::reframe(earliest_date = min(treatment_start_date, na.rm=T),
+                 latest_date = max(treatment_start_date, na.rm=T)) |> 
+  knitr::kable()
+
+df |> 
+  dplyr::mutate(year = lubridate::year(treatment_start_date)) |> 
+  dplyr::count(year, name = 'unique patient/treatment cycle combinations')
+
+ggplot(df) + 
+  geom_histogram(aes(treatment_start_date)) + 
+  scale_x_date(date_breaks = 'year', date_labels = '%Y') +
+  theme_minimal()
+```
+
+## Key Variables
+```{r find_averages_for_calculator}
+# Filter dataset for people with frozen eggs.
+key_var_summary = df |> 
+  dplyr::mutate(total_2pn_eggs = num_2pn_from_fresh_eggs + num_2pn_from_frozen_eggs) |> 
+  dplyr::group_by(age_group) |> 
+  dplyr::reframe(
+    dplyr::across(
+      .cols = c(bmi, age, amh, afc, num_euploid_blast, num_eggs_collected, num_m2_eggs, total_2pn_eggs),
+      \(x) median(x,na.rm=T),.names = "median_{.col}"
+    )
+  )
+  
+key_var_summary |> 
+  knitr::kable()
+```
+
+## Frozen Eggs - which var?
+```{r}
+df |> 
+  dplyr::count(ever_thaw) |> 
+  knitr::kable()
+
+df |> 
+  dplyr::count(num_2pn_from_frozen_eggs) |> 
+  dplyr::mutate(total_from_frozen_eggs = sum(n[num_2pn_from_frozen_eggs != 0])) |> 
+  knitr::kable()
+
+```
+
 # Patient-level Statistical Models {.tabset}
 
 ## Binomial Logistic Model {.tabset}
@@ -186,21 +233,6 @@ ggplot(predicted_probs, aes(x = age_group, y = predicted_p)) +
 ## Compare Results with Branch's Calculator
 
 Here are the inputs we used for Branch Calculator:
-
-```{r find_averages_for_calculator}
-# Filter dataset for people with frozen eggs.
-calc_inputs = df |> 
-  dplyr::group_by(age_group) |> 
-  dplyr::reframe(
-    median_bmi = median(bmi,na.rm=T),
-    median_age = median(age,na.rm=T),
-    median_amh = median(amh,na.rm=T),
-    median_afc = median(afc,na.rm=T)
-  )
-
-calc_inputs |> 
-  knitr::kable()
-```
 
 ![](images/branch_calculator_example_results.JPG)
 
@@ -590,6 +622,8 @@ coef_bb <- coef(quasi_binom_model)
 
 alpha <- exp(coef_bb[1])
 beta <- exp(coef_bb[2])
+
+validate_model(euploid_bb, euploid_summary, "successes")
 
 euploid_p = rbeta(n_sim, alpha, beta)
 euploid_costs <- run_simulation(euploid_p, cost_per_cycle, payout_amount, n_sim)
