@@ -18,108 +18,32 @@ library(ResourceSelection)
 library(knitr)
 library(tidyr)
 set.seed(123)
-
-
 ```
 
 ```{r define_functions}
-summarise_to_age_classes = function(dat, var_to_mean){
-  dat |> 
-    mutate(age_group = case_when(
-      age < 35 ~ "<35",
-      age >= 35 & age <= 37 ~ "35-37",
-      age >= 38 & age <= 40 ~ "38-40",
-      age >= 41 ~ "41+"
-    )) |> 
-    dplyr::mutate(age_group = factor(age_group, levels = c("<35","35-37","38-40","41+"))) |> 
-    dplyr::group_by(age_group) |> 
-    dplyr::reframe(
-      !!paste0(var_to_mean, "_mean") := mean(!!rlang::sym(var_to_mean), na.rm = TRUE),
-      !!paste0(var_to_mean, "_median") := median(!!rlang::sym(var_to_mean), na.rm = TRUE)
-    ) |> 
-    dplyr::arrange(age_group)
-}
-
-apply_binomial_models_in_succession(dat){
-  
-}
-
-
-############################################################
-# VALIDATION FUNCTION
-############################################################
-
-validate_model <- function(model, data, outcome_var) {
-
-  pred <- predict(model, type = "response")
-
-  # AUC
-  # Are there more than two levels of the outcome var?
-  lvls_outcome = length(unique(data[[outcome_var]]))
-  
-  if(lvls_outcome == 2){
-    roc_obj <- roc(data[[outcome_var]], pred)
-  } else {
-    roc_obj <- multiclass.roc(data[[outcome_var]], pred)
-  }
-  
-  auc_val <- auc(roc_obj)
-
-  # Calibration
-  data$pred_bin <- cut(pred, breaks = 10)
-  calib <- data %>%
-    group_by(pred_bin) %>%
-    summarize(predicted = mean(pred),
-              observed = mean(.data[[outcome_var]]))
-
-  # Dispersion
-  dispersion <- sum(residuals(model, type = "pearson")^2) / model$df.residual
-
-  print(paste("AUC:", auc_val))
-  print(paste("Dispersion:", dispersion))
-  print(calib)
-  return(calib)
-}
-
-############################################################
-# FUNCTION: MONTE CARLO PRICING ENGINE
-############################################################
-
-run_simulation <- function(p_vec, cost, payout, n_sim) {
-
-  sim_costs <- replicate(n_sim, {
-
-    p <- sample(p_vec, 1)
-    outcome <- rbinom(1, 1, p)
-
-    payout_cost <- ifelse(outcome == 1, 0, payout)
-    total_cost <- cost + payout_cost
-
-    return(total_cost)
-  })
-}
+source(file.path(here::here(),"R/utils/modeling_stats_utility_functions.R"))
 ```
 
-```{r include=F}
+```{r read_in_and_clean_cycle_data, include=F}
 df <- readr::read_rds("data/clean_data/cld_filtered.rds") |> 
-  dplyr::rename(pregnant = pregnant_bool) |> 
-  dplyr::mutate(pregnant = ifelse(pregnant == "yes", 1, 0))
+  dplyr::rename(pregnant = pregnant_bool)
 
 # Also read in the egg table.
 egg_df = readr::read_csv("data/Branch Care/Data/structured_egg_table_20260130 Adam Walter.csv")
-embryo_df = readr::read_csv("data/Branch Care/Data/MLData_Nov25 Adam Walter/Embryo.csv")
+# embryo_df = readr::read_csv("data/Branch Care/Data/MLData_Nov25 Adam Walter/Embryo.csv")
 
 ## LOOK AT cryo_day 5, 6, or 7. If it's true for any of those days, that's a frozen embryo.
 ## FILTER out rows where we have cryo_day on day 2 or 3.
 
 # WAS AN EGG FROZEN? Look at cryo_day_0 - if its not NULL/NA, then its a frozen egg.
-cat(paste0("\nBefore filtering away eggs with entries for the columns 'cryo_day_2' or 'cryo_day_3', there are this many rows in egg table: ", nrow(egg_df)))
+# cat(paste0("\nBefore filtering away eggs with entries for the columns 'cryo_day_2' or 'cryo_day_3', there are this many rows in egg table: ", nrow(egg_df)))
 
 egg_df <- egg_df %>%
-  # Drop rows where cryo_day is 2 or 3.
+  dplyr::mutate(cryo_day_2 = tidyr::replace_na(cryo_day_2, FALSE),
+                cryo_day_3 = tidyr::replace_na(cryo_day_3, FALSE)) |> 
   dplyr::filter(!cryo_day_2, !cryo_day_3)
 
-cat(paste0("\nAfter filtering, there are this many rows in egg table: ", nrow(egg_df)))
+# cat(paste0("\nAfter filtering, there are this many rows in egg table: ", nrow(egg_df)))
 
 egg_df = egg_df |> 
   dplyr::mutate(
@@ -129,32 +53,17 @@ egg_df = egg_df |>
     frozen_embryo = if_any(.cols = c('cryo_day_5','cryo_day_6','cryo_day_7'), ~ coalesce(. == TRUE, FALSE))
   )
 
-  # mutate(
-  #   ever_thaw = if_any(starts_with("thaw_day_"), ~ coalesce(. == TRUE, FALSE))
-  # )
-
-# # Pull thawed_oocyte column to our egg_df
-# egg_df |> 
+# # Join on the 'frozen_egg' and 'frozen_embryo' to our cycle-level data.
+# df = df |> 
 #   dplyr::left_join(
-#     embryo_df |> 
-#   dplyr::select(pat_id, egg_id, thawed_oocyte) |> 
-#   dplyr::distinct()
-#   )
-
-# Join on the 'ever_thaw' to our cycle-level data.
-df = df |> 
-  dplyr::left_join(
-    egg_df |> 
-      dplyr::select(pat_id, tx_id, frozen_egg, frozen_embryo) |> 
-      dplyr::group_by(pat_id, tx_id) |> 
-      dplyr::reframe(frozen_egg = sum(frozen_egg,na.rm=T) > 0,
-                     frozen_embryo = sum(frozen_embryo,na.rm=T) > 0) |> 
-      dplyr::distinct()
-  ) |> 
-  dplyr::mutate(frozen_egg = tidyr::replace_na(frozen_egg, FALSE))
-
-# Subset data for thaws/frozen
-
+#     egg_df |> 
+#       dplyr::select(pat_id, tx_id, frozen_egg, frozen_embryo) |> 
+#       dplyr::group_by(pat_id, tx_id) |> 
+#       dplyr::reframe(frozen_egg = sum(frozen_egg,na.rm=T) > 0,
+#                      frozen_embryo = sum(frozen_embryo,na.rm=T) > 0) |> 
+#       dplyr::distinct()
+#   ) |> 
+#   dplyr::mutate(frozen_egg = tidyr::replace_na(frozen_egg, FALSE))
 
 df <- df %>%
   mutate(age_group = case_when(
@@ -162,8 +71,7 @@ df <- df %>%
     age >= 35 & age <= 37 ~ "35-37",
     age >= 38 & age <= 40 ~ "38-40",
     age >= 41 ~ "41+"
-  )) %>% 
-  select(-age_bin)
+  ))
 
 df$age_group <- as.factor(df$age_group)
 
@@ -232,35 +140,73 @@ ggplot(df) +
 ```
 
 ## Key Variables
-```{r find_averages_for_calculator}
+```{r make_tbl_for_key_variables}
 # Filter dataset for people with frozen eggs.
-key_var_summary = df |> 
-  dplyr::mutate(total_2pn_eggs = num_2pn_from_fresh_eggs + num_2pn_from_frozen_eggs) |> 
-  dplyr::group_by(age_group) |> 
-  dplyr::reframe(
-    dplyr::across(
-      .cols = c(bmi, age, amh, afc, num_euploid_blast, num_eggs_collected, num_m2_eggs, total_2pn_eggs),
-      \(x) median(x,na.rm=T),.names = "median_{.col}"
-    )
+# key_var_summary = df |> 
+#   dplyr::mutate(total_2pn_eggs = num_2pn_from_fresh_eggs + num_2pn_from_frozen_eggs) |> 
+#   dplyr::group_by(age_group) |> 
+#   dplyr::reframe(
+#     dplyr::across(
+#       .cols = c(bmi, age, amh, afc, num_euploid_blast, num_eggs_collected, num_m2_eggs, total_2pn_eggs),
+#       \(x) median(x,na.rm=T),.names = "median_{.col}"
+#     )
+#   )
+var_summary <- df %>%
+  mutate(
+    total_2pn_eggs = num_2pn_from_fresh_eggs + num_2pn_from_frozen_eggs
+  ) %>%
+  group_by(age_group) %>%
+  summarise(
+    n_cycles = n(),
+    
+    # Euploid embryos
+    mean_euploid    = mean(num_euploid_blast, na.rm = TRUE),
+    iqr_euploid_l   = quantile(num_euploid_blast, 0.25, na.rm = TRUE),
+    iqr_euploid_u   = quantile(num_euploid_blast, 0.75, na.rm = TRUE),
+    pct_ge1_euploid = mean(coalesce(num_euploid_blast, 0) >= 1) * 100,
+    
+    # Eggs retrieved
+    mean_eggs       = mean(num_eggs_collected, na.rm = TRUE),
+    iqr_eggs_l      = quantile(num_eggs_collected, 0.25, na.rm = TRUE),
+    iqr_eggs_u      = quantile(num_eggs_collected, 0.75, na.rm = TRUE),
+    
+    # MII eggs
+    mean_m2         = mean(num_m2_eggs, na.rm = TRUE),
+    iqr_m2_l        = quantile(num_m2_eggs, 0.25, na.rm = TRUE),
+    iqr_m2_u        = quantile(num_m2_eggs, 0.75, na.rm = TRUE),
+    
+    # Fertilized (2PN)
+    mean_2pn        = mean(total_2pn_eggs, na.rm = TRUE),
+    iqr_2pn_l       = quantile(total_2pn_eggs, 0.25, na.rm = TRUE),
+    iqr_2pn_u       = quantile(total_2pn_eggs, 0.75, na.rm = TRUE),
+    
+    # AMH
+    mean_amh        = mean(amh, na.rm = TRUE),
+    iqr_amh_l       = quantile(amh, 0.25, na.rm = TRUE),
+    iqr_amh_u       = quantile(amh, 0.75, na.rm = TRUE),
+    
+    # AFC
+    mean_afc        = mean(afc, na.rm = TRUE),
+    iqr_afc_l       = quantile(afc, 0.25, na.rm = TRUE),
+    iqr_afc_u       = quantile(afc, 0.75, na.rm = TRUE),
+    
+    .groups = "drop"
   )
-  
-key_var_summary |> 
+
+
+var_summary_fmt <- var_summary %>%
+  mutate(
+    eggs_fmt = sprintf("%.1f (%.1f–%.1f)", mean_eggs, iqr_eggs_l, iqr_eggs_u),
+    m2_fmt   = sprintf("%.1f (%.1f–%.1f)", mean_m2, iqr_m2_l, iqr_m2_u),
+    p2n_fmt  = sprintf("%.1f (%.1f–%.1f)", mean_2pn, iqr_2pn_l, iqr_2pn_u),
+    amh_fmt  = sprintf("%.2f (%.2f–%.2f)", mean_amh, iqr_amh_l, iqr_amh_u),
+    afc_fmt  = sprintf("%.1f (%.1f–%.1f)", mean_afc, iqr_afc_l, iqr_afc_u),
+    euploid_fmt = sprintf("%.1f (%.1f–%.1f)", mean_euploid, iqr_euploid_l, iqr_euploid_u),
+    euploid_pct = sprintf("%.1f%%", pct_ge1_euploid)
+  )
+
+var_summary_fmt |> 
   knitr::kable()
-```
-
-## Frozen Eggs and Embryos
-
-These counts consider a treatment cycle to be TRUE for frozen_egg or frozen_embryo if one or more frozen egg or embryo was used in the treatment (otherwise it's difficult to know how to count treatment cycles that may have some eggs that are frozen and some are not - if that occurs).
-```{r}
-df |> 
-  dplyr::count(frozen_egg, frozen_embryo) |> 
-  knitr::kable()
-
-df |> 
-  dplyr::count(num_2pn_from_frozen_eggs) |> 
-  dplyr::mutate(total_from_frozen_eggs = sum(n[num_2pn_from_frozen_eggs != 0])) |> 
-  knitr::kable()
-
 ```
 
 # Patient-level Statistical Models {.tabset}
@@ -288,25 +234,27 @@ logit_model <- glm(
   data = m1df
 )
 
+validate_model(logit_model, data = m1df, 'pregnant')
+
 logit_summary <- summary(logit_model)$coefficients
 kable(logit_summary, digits = 3)
 ```
 
-### Multiple Predictor Variables
-
-The model is this:
-
-$pregant \sim agegroup + amh + afc+ bmi$
-
 ```{r}
-logit_model_more_vars <- glm(
-  pregnant ~ age + amh + afc + bmi,
-  family = binomial(link = "logit"),
-  data = m1df
-)
-
-logit_more_vars_summary <- summary(logit_model_more_vars)$coefficients
-kable(logit_more_vars_summary, digits = 3)
+# ### Multiple Predictor Variables
+# 
+# The model is this:
+# 
+# $pregant \sim agegroup + amh + afc+ bmi$
+#   
+# logit_model_more_vars <- glm(
+#   pregnant ~ age + amh + afc + bmi,
+#   family = binomial(link = "logit"),
+#   data = m1df
+# )
+# 
+# logit_more_vars_summary <- summary(logit_model_more_vars)$coefficients
+# kable(logit_more_vars_summary, digits = 3)
 ```
 
 ### With Infertility Diagnosis
@@ -318,7 +266,25 @@ logit_model_infert <- glm(
 )
 
 logit_infert_summary <- summary(logit_model_infert)$coefficients
+
 kable(logit_infert_summary, digits = 3)
+
+# make_sig_primary_infert_tbl = function(dat){
+#   the_row_names = row.names(logit_infert_summary)
+#   
+#   logit_infert_summary = logit_infert_summary |> 
+#     tidyr::as_tibble()
+#   
+#   logit_infert_summary |> 
+#     dplyr::mutate(var_name = the_row_names) |> 
+#     # dplyr::filter(`Pr(>|z|)` <= 0.05) |> 
+#     dplyr::mutate(var_name = stringr::str_remove_all(var_name,".*_cl")) |> 
+#     dplyr::filter(!var_name %in% c('age','(Intercept)'))
+# }
+# 
+# m1_infert_sum_tbl = make_sig_primary_infert_tbl(logit_infert_summary)
+# 
+# m1_infert_sum_tbl |> knitr::kable()
 ```
 
 ## Predicted Probabilities
@@ -326,31 +292,36 @@ kable(logit_infert_summary, digits = 3)
 ```{r}
 predicted_probs <- m1df %>%
   distinct(age, primary_infertility_diagnosis_cl) %>%
-  mutate(predicted_p = predict(logit_model, newdata = ., type = "response"),
-         predicted_p_infert = predict(logit_model_infert, newdata = ., type = "response")) |> 
+  mutate(predicted_p = predict(logit_model, newdata = ., type = "response")#,
+         # predicted_p_infert = predict(logit_model_infert, newdata = ., type = "response")
+         ) |> 
   dplyr::arrange(age)
 
-# Try this for equation with more predictor vars
-predicted_probs_more_vars = m1df %>%
-  dplyr::distinct(age, bmi, amh, afc) %>%
-  dplyr::filter(!is.na(afc)) %>%
-  mutate(predicted_p = predict(logit_model_more_vars, newdata = ., type = "response")) |>
-  dplyr::arrange(age)
+# # Try this for equation with more predictor vars
+# predicted_probs_more_vars = m1df %>%
+#   dplyr::distinct(age, bmi, amh, afc) %>%
+#   dplyr::filter(!is.na(afc)) %>%
+#   mutate(predicted_p = predict(logit_model_more_vars, newdata = ., type = "response")) |>
+#   dplyr::arrange(age)
 
 # Regroup predicted probabilities
 predicted_probs |> 
-  summarise_to_age_classes('predicted_p')
+  summarise_to_age_classes('predicted_p') |> 
+  knitr::kable()
 
-predicted_probs |> 
-  dplyr::group_by(primary_infertility_diagnosis_cl) |> 
-  dplyr::group_split() |> 
-  purrr::map( ~ {
-    primary_infertility_diagnosis_cl = unique(.x$primary_infertility_diagnosis_cl)
-    summarise_to_age_classes(.x, 'predicted_p') |> 
-      dplyr::mutate(primary_infertility_diagnosis_cl)
-  }) |> 
-  dplyr::bind_rows() |> 
-  DT::datatable()
+# Data table below shows predicted probabilities
+# predicted_probs |> 
+#   # Filter for just those diagnoses with significant result
+#   dplyr::filter(primary_infertility_diagnosis_cl %in% m1_infert_sum_tbl[m1_infert_sum_tbl$`Pr(>|z|)` <= 0.05,]$var_name) |> 
+#   dplyr::group_by(primary_infertility_diagnosis_cl) |> 
+#   dplyr::group_split() |> 
+#   purrr::map( ~ {
+#     primary_infertility_diagnosis_cl = unique(.x$primary_infertility_diagnosis_cl)
+#     summarise_to_age_classes(.x, 'predicted_p_infert') |> 
+#       dplyr::mutate(primary_infertility_diagnosis_cl)
+#   }) |> 
+#   dplyr::bind_rows() |> 
+#   DT::datatable()
 
 # ggplot(predicted_probs_frozen) + geom_histogram(aes(predicted_p))
 
@@ -387,7 +358,7 @@ $pregant \sim agegroup + amh + afc+ bmi$
 
 N <- 1
 
-one_cycle_probs <- predicted_probs_more_vars %>%
+one_cycle_probs <- predicted_probs %>%
   mutate(
     success_N_cycles = 1 - (1 - predicted_p)^N,
     failure_N_cycles = (1 - predicted_p)^N
@@ -395,7 +366,7 @@ one_cycle_probs <- predicted_probs_more_vars %>%
 
 N <- 2
 
-two_cycle_probs <- predicted_probs_more_vars %>%
+two_cycle_probs <- predicted_probs %>%
   mutate(
     success_N_cycles = 1 - (1 - predicted_p)^N,
     failure_N_cycles = (1 - predicted_p)^N
@@ -546,67 +517,6 @@ patient_summary <- m1df %>%
 
 # table(patient_summary$age) |> knitr::kable()
 
-run_binomial_model_with_various_distributions = function(dat, formula){
-  
-  formula <- as.formula(
-    formula
-  )
-  
-  binom_mod = glm(
-    # cbind(successes, attempts - successes) ~ age,
-    formula = formula,
-    family = binomial,
-    data = patient_summary
-  )
-  
-  validation_res = validate_model(binom_mod, data = patient_summary, outcome_var = 'successes') |> 
-    # Get console output as make into a list
-    capture.output() |> 
-    suppressWarnings()
-  
-  # snag the dispersion.
-  dispersion_amount = validation_res[2] |>
-    stringr::str_extract('(?<=: ).*(?=\")') |> 
-    as.numeric() |> 
-    round(4)
-  
-  if(dispersion_amount > 1.5){
-    cat(paste0("\nDispersion amount was too high for binomial distribution (",dispersion_amount,") - now trying quasibinomial distribution."))
-    binom_mod = glm(
-      cbind(successes, attempts - successes) ~ age,
-      family = quasibinomial,
-      data = patient_summary
-    )
-    validation_res = validate_model(binom_mod, data = patient_summary, outcome_var = 'successes') |> 
-      # Get console output as make into a list
-      capture.output() |> 
-      suppressWarnings()
-    # snag the dispersion.
-    dispersion_amount = validation_res[2] |>
-      stringr::str_extract('(?<=: ).*(?=\")') |> 
-      as.numeric() |> 
-      round(4)
-    if(dispersion_amount > 1.5){
-      cat(paste0("\nDispersion amount was too high for quasibinomial distribution (",dispersion_amount,") - now trying betabinomial distribution."))
-      binom_mod = glm(
-        cbind(successes, attempts - successes) ~ age,
-        family = quasibinomial,
-        data = patient_summary
-      )
-      validation_res = validate_model(binom_mod, data = patient_summary, outcome_var = 'successes') |> 
-        # Get console output as make into a list
-        capture.output() |> 
-        suppressWarnings()
-      # snag the dispersion.
-      dispersion_amount = validation_res[2] |>
-        stringr::str_extract('(?<=: ).*(?=\")') |> 
-        as.numeric() |> 
-        round(4)
-    }
-  }
-  return(binom_mod)
-}
-
 binom_mod = run_binomial_model_with_various_distributions(patient_summary, formula = "cbind(successes, attempts - successes) ~ age") |> 
   suppressMessages()
 
@@ -681,23 +591,11 @@ The following statistics are based on these values:
 
 -   admin load: 0.1
 
-```{r include = F}
+```{r read_in_egg_dataframe_and_clean_it, include = F}
 
-egg_df = readr::read_csv("data/Branch Care/Data/structured_egg_table_20260130 Adam Walter.csv")
-# FINANCIAL INPUTS
+# I'm unsure if we NEED to read in a new copy of the structured egg table... but if we do, we follow the same cleaning steps as above.
+egg_df = readr::read_rds("data/clean_data/cleaned_egg_level_df.rds")
 
-egg_df = egg_df |> 
-  dplyr::filter(!cryo_day_2, !cryo_day_3)
-
-# Recalculate frozen_egg / frozen_embryo as we did above.
-egg_df = egg_df |> 
-  dplyr::mutate(
-    frozen_egg = cryo_day_0
-  ) |> 
-  mutate(
-    frozen_embryo = if_any(.cols = c('cryo_day_5','cryo_day_6','cryo_day_7'), ~ coalesce(. == TRUE, FALSE))
-  )
-  
 # Zoom in on relevant rows, drop rows with no info for age and attempt.
 egg_df = egg_df |> 
   dplyr::select(pat_id, egg_id, age, attempt, pgd_clinresult, frozen_embryo, frozen_egg) |> 
@@ -713,7 +611,7 @@ egg_df = egg_df |>
   )
 )
 
-# Add treatment course ID and cycle number ID columns 
+# Add treatment course ID and cycle number ID columns
 df = df |> 
   dplyr::arrange(pat_id, treatment_start_date) |>
   dplyr::group_by(pat_id) |>
@@ -738,60 +636,39 @@ admin_load <- 0.10
 
 n_sim <- 5000 # Monte Carlo iterations
 
-
-
-# ############################################################
-# # FUNCTION: FINAL PRICING
-# ############################################################
-# 
-# price_from_sim <- function(sim_df, risk_margin, admin_load) {
-# 
-#   expected_cost <- mean(sim_df$total_cost)
-# 
-#   # Risk metrics
-#   var_95 <- quantile(sim_df$total_cost, 0.95)
-# 
-#   premium <- expected_cost * (1 + risk_margin + admin_load)
-# 
-#   return(data.frame(
-#     expected_cost = expected_cost,
-#     var_95 = var_95,
-#     premium = premium
-#   ))
-# }
-
 ```
 
 ## Euploid Embryo Model (Binomial)
 
 ```{r}
 ############################################################
-# 1. EUPLOID EMBRYO MODEL (QUASI-BINOMIAL)
+# 1. EUPLOID EMBRYO MODEL (BINOMIAL)
 ############################################################
 
-# Aggregate to patient-level counts
+# Aggregate structured egg table to patient-level counts
 euploid_summary = egg_df |>
+  # Remove frozen eggs
+  dplyr::filter(!frozen_egg) |> 
   dplyr::mutate(success = pgd_clinresult %in% c("Euploid","Normal") & !is.na(pgd_clinresult)) |> 
   group_by(pat_id) |>
-  summarise(
+  reframe(
     successes = sum(success),
     number_of_eggs_attempted = n(),
-    age = first(age),
-    age_group = first(age_group),
-    .groups = "drop"
+    age = median(age,na.rm=T),
+    age_group = first(age_group)
   )
 
 # TODO: Check this formula for model two with Brandon - based on Lara's powerpoint, should be ">= embryo ~ age + eggs_retrived". Is that what we're doing here?
 
-euploid_binom_model = run_binomial_model_with_various_distributions(euploid_summary, formula = "cbind(successes, number_of_eggs_attempted - successes) ~ age")
+# euploid_binom_model = run_binomial_model_with_various_distributions(euploid_summary, formula = "cbind(successes, number_of_eggs_attempted - successes) ~ age")
 
 # m2_binom_model$family$family
 
-# euploid_bb = glm(
-#   cbind(successes, number_of_eggs_attempted - successes) ~ age,
-#   family = quasibinomial,
-#   data = euploid_summary
-# )
+euploid_binom_model = glm(
+  cbind(successes, number_of_eggs_attempted - successes) ~ age,
+  family = binomial,
+  data = euploid_summary
+)
 
 euploid_model_summary = coef(summary(euploid_binom_model)) |>
   as.data.frame()
@@ -801,12 +678,11 @@ coef_euploid <- coef(euploid_binom_model)
 alpha <- exp(coef_euploid[1])
 beta <- exp(coef_euploid[2])
 
-# validate_model(euploid_bb, euploid_summary, "successes")
+validate_model(euploid_binom_model, euploid_summary, "successes")
 
 # Add probabilities to egg_df
 
-
-rbeta(n_sim, alpha, beta)
+euploid_p = rbeta(n_sim, alpha, beta)
 
 euploid_costs <- run_simulation(euploid_p, cost_per_cycle, payout_amount, n_sim)
 
@@ -829,27 +705,39 @@ print("The following table represents predicted successes or failures at the uni
 euploid_sim_results |> 
   DT::datatable()
 
-print("And here are results grouped back into age groups.")
 
-euploid_sim_results |> 
-  summarise_to_age_classes('simulated_p')
 ```
 
-### Predicted Probabilities averaged by Age Group
+### Simulated Probabilities averaged by Age Group
 ```{r}
 
-euploid_summary = euploid_summary %>%
-  dplyr::mutate(predicted_p = predict(euploid_binom_model, newdata = ., type = "response"))
+print("And here are results grouped back into age groups.")
 
-euploid_summary |> 
-  summarise_to_age_classes('predicted_p') |> 
+# This is for predicted probabilities - not waht we want.
+# euploid_summary = euploid_summary %>%
+#   dplyr::mutate(predicted_p = predict(euploid_binom_model, newdata = ., type = "response"))
+# 
+# euploid_summary |> 
+#   dplyr::group_by(age_group) |> 
+#   dplyr::reframe(
+#     predicted_p_mean = mean(predicted_p, na.rm = TRUE),
+#     predicted_p_median = median(predicted_p, na.rm = TRUE)
+#   ) |> 
+#   dplyr::arrange(age_group) |> 
+#   knitr::kable()
+
+euploid_sim_results |> 
+  dplyr::group_by(age_group) |> 
+  dplyr::reframe(
+    simulated_p_mean = mean(simulated_p, na.rm = TRUE),
+    simulated_p_median = median(simulated_p, na.rm = TRUE)
+  ) |> 
+  dplyr::arrange(age_group) |> 
   knitr::kable()
-
 ```
 
 ### Model with Primary Infertility Diagnosis Added
 ```{r}
-
 euploid_summary = egg_df |>
   dplyr::mutate(success = pgd_clinresult %in% c("Euploid","Normal") & !is.na(pgd_clinresult)) |> 
   group_by(pat_id) |>
@@ -863,20 +751,24 @@ euploid_summary = egg_df |>
   dplyr::left_join(df |> dplyr::select(pat_id, primary_infertility_diagnosis_cl), by = dplyr::join_by(pat_id))
 
 euploid_binom_model = glm(
-  pregnant ~ age + primary_infertility_diagnosis_cl,
+  cbind(successes, number_of_eggs_attempted - successes) ~ age + primary_infertility_diagnosis_cl,
   family = binomial,
-  data = m1df
+  data = euploid_summary
 )
 
-dplyr::group_by(primary_infertility_diagnosis_cl) |> 
-  dplyr::group_split() |> 
-  purrr::map( ~ {
-    primary_infertility_diagnosis_cl = unique(.x$primary_infertility_diagnosis_cl)
-    summarise_to_age_classes(.x, 'predicted_p') |> 
-      dplyr::mutate(primary_infertility_diagnosis_cl)
-  }) |> 
-  dplyr::bind_rows() |> 
-  DT::datatable()
+validate_model(euploid_binom_model, euploid_summary, 'successes')
+
+summary(euploid_binom_model)
+
+# dplyr::group_by(primary_infertility_diagnosis_cl) |> 
+#   dplyr::group_split() |> 
+#   purrr::map( ~ {
+#     primary_infertility_diagnosis_cl = unique(.x$primary_infertility_diagnosis_cl)
+#     summarise_to_age_classes(.x, 'predicted_p') |> 
+#       dplyr::mutate(primary_infertility_diagnosis_cl)
+#   }) |> 
+#   dplyr::bind_rows() |> 
+#   DT::datatable()
 ```
 
 
@@ -935,20 +827,20 @@ s_egg_model = glm(
 
 calib_tbl = validate_model(s_egg_model, single_cycle_egg_df, "successes")
 
-single_cycle_egg_df$egg_p <- predict(s_egg_model, type = "response")
-
-egg_costs <- run_simulation(single_cycle_egg_df$egg_p, cost_per_cycle, payout_amount, n_sim)
-
-data.frame(individual_cost = egg_costs) |> 
-  dplyr::count(individual_cost, name = "simulated_frequency") |> 
-  dplyr::mutate(predicted_cost = simulated_frequency * individual_cost) |> 
-  knitr::kable()
+# single_cycle_egg_df$egg_p <- predict(s_egg_model, type = "response")
 # 
+# egg_costs <- run_simulation(single_cycle_egg_df$egg_p, cost_per_cycle, payout_amount, n_sim)
+# 
+# data.frame(individual_cost = egg_costs) |> 
+#   dplyr::count(individual_cost, name = "simulated_frequency") |> 
+#   dplyr::mutate(predicted_cost = simulated_frequency * individual_cost) |> 
+#   knitr::kable()
+# # 
 # # By age, first
-# coef_bb <- coef(s_egg_model)
-# 
-# alpha <- exp(coef_bb[1])
-# beta <- exp(coef_bb[2])
+coef_bb <- coef(s_egg_model)
+
+alpha <- exp(coef_bb[1])
+beta <- exp(coef_bb[2])
 # 
 # egg_sim <- run_simulation(alpha, beta, cost_per_cycle, payout_amount)
 # 
@@ -956,6 +848,32 @@ data.frame(individual_cost = egg_costs) |>
 # 
 # print("Single Cycle Egg Model (Actuarial; based on 'Age' numeric variable)")
 # egg_results |> knitr::kable()
+
+single_cycle_p = rbeta(n_sim, alpha, beta)
+
+singe_cycle_costs <- run_simulation(euploid_p, cost_per_cycle, payout_amount, n_sim)
+
+data.frame(pred_probs = euploid_p) |>
+  ggplot() +
+  geom_histogram(aes(pred_probs)) + 
+  labs(x = "Predicted Probability", title = paste0("Predicted Probabilities with Monte-Carlo: ",n_sim," simulation runs")) + 
+  theme_minimal()
+
+# Simulate results with egg dataframe.
+euploid_sim_results <- euploid_summary %>%
+  rowwise() %>%
+  mutate(
+    simulated_p = rbeta(1, shape1 = 2, shape2 = 5), # example params
+    success_sim = rbinom(1, size = number_of_eggs_attempted, prob = simulated_p)
+)
+
+print("The following table represents predicted successes or failures at the unique pat_id level based on the euploid binomial model.")
+
+euploid_sim_results |> 
+  DT::datatable()
+
+print("And here are results grouped back into age groups.")
+
 ```
 
 ### Predicted Probabilities averaged by Age Group

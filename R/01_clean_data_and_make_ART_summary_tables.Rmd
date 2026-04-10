@@ -138,9 +138,17 @@ cld <- treat_w_egg_and_embryo %>%
   # dplyr::filter(treatment %in% c("IVF","ICSI")) |> 
   mutate(
     amh = coalesce(amh_start, amh),
-    afc = coalesce(afc_first_baseline, afc_other)
-  ) %>%
+    afc = coalesce(afc_first_baseline, afc_other),
+  ) |> 
   group_by(pat_id, tx_id) %>%
+  dplyr::mutate(
+    num_frozen_eggs = sum(frozen_egg),
+    num_fresh_eggs = sum(!frozen_egg),
+    num_total_eggs = num_frozen_eggs + num_fresh_eggs,
+    num_frozen_embryos = sum(frozen_embryo),
+    num_fresh_embryos = sum(!frozen_embryo),
+    num_total_embryos = num_frozen_embryos + num_fresh_embryos
+  ) %>%
   summarise(
     across(-c(pregnant, live_birth_Derive), first),
     pregnant_bool = as.integer(any(grepl("Clinical", pregnant, ignore.case = TRUE), na.rm = TRUE)),
@@ -162,8 +170,14 @@ cld_filtered <- cld %>%
          # number_2pn_eggs,
          # number_euploid_embryos,
          # donated,
-         frozen_embryo,
-         frozen_egg,
+         # frozen_embryo,
+         # frozen_egg,
+         num_frozen_eggs,
+         num_fresh_eggs,
+         num_total_eggs,
+         num_frozen_embryos,
+         num_fresh_embryos,
+         num_total_embryos,
          num_eggs_collected,
          total_fertilized,
          # thawed_oocyte,
@@ -285,6 +299,10 @@ just_secondary = cld_filtered |>
 
 cat(paste0("\n",nrow(just_secondary)," patients have info for the secondary diagnosis but not the first."))
 
+```
+
+```{r make_cleaned_structured_egg_table}
+readr::write_rds(treat_w_egg_and_embryo,"data/clean_data/cleaned_egg_level_df.rds")
 ```
 
 ```{r}
