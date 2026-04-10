@@ -553,8 +553,8 @@ egg_results_age_group |> knitr::kable()
 
 ## Two-cycle Egg Model (Standard binomial model)
 
-Note: this model includes only patients that have more than one treatment recorded in the dataset.
-Note: this model assumes that treatments that occur within 365 days belong to a single treatment course, i.e. a collection of cycles including cycle 1, cycle 2, etc.; this assumption was necessary to compute this model because the dataset lacks a variable that otherwise links treatments across time. We could modify this assumption by removing this 365-day date proximity threshold, though this may incorrectly imply relatedness between distinct treatments performed by a patient across multiple years.
+Note: this model includes only patients that have more than one treatment recorded in the dataset. Note: this model assumes that treatments that occur within 365 days belong to a single treatment course, i.e. a collection of cycles including cycle 1, cycle 2, etc.; this assumption was necessary to compute this model because the dataset lacks a variable that otherwise links treatments across time. We could modify this assumption by removing this 365-day date proximity threshold, though this may incorrectly imply relatedness between distinct treatments performed by a patient across multiple years.
+
 ```{r}
 threshold_two <- 15
 
@@ -638,6 +638,7 @@ two_egg_results_age_group |> knitr::kable()
 ```
 
 ## Final Comparison
+
 ```{r}
 
 final_results <- dplyr::bind_rows(

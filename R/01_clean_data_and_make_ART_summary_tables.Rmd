@@ -158,6 +158,7 @@ cld_filtered <- cld %>%
          bmi,
          amh,
          afc,
+         thawed_oocyte,
          pregnant_bool,
          birth_bool)
 
@@ -269,9 +270,10 @@ cat(paste0("\n",nrow(just_secondary)," patients have info for the secondary diag
 
 ## ART table summaries {.tabset}
 
-To compare with published ART tables for Spring Fertility here: https://art.cdc.gov/
+To compare with published ART tables for Spring Fertility here: <https://art.cdc.gov/>
 
 ### Cycle-level Summaries
+
 ```{r}
 
 cld_filtered = cld_filtered |> 
@@ -320,6 +322,7 @@ cld_filtered |>
 ```
 
 ### Age of Patient Histogram
+
 ```{r}
 p = cld_filtered |> 
   dplyr::group_by(pat_id) |> 
@@ -362,4 +365,3 @@ ggplotly(p)
 ```{r}
 readr::write_rds(cld_filtered,"data/clean_data/cld_filtered.rds")
 ```
-
