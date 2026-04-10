@@ -162,6 +162,8 @@ cld_filtered <- cld %>%
          # number_2pn_eggs,
          # number_euploid_embryos,
          # donated,
+         frozen_embryo,
+         frozen_egg,
          num_eggs_collected,
          total_fertilized,
          # thawed_oocyte,
