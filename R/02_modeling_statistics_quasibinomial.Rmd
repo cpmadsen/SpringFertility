@@ -219,6 +219,7 @@ m1df = df |>
 ```
 
 This filter reduces the number of rows of data in this cycle-level table from `r nrow(df)` to `r nrow(m1df)`.
+
 ## Binomial Logistic Model {.tabset}
 
 ### Just by Age group
@@ -638,7 +639,9 @@ n_sim <- 5000 # Monte Carlo iterations
 
 ```
 
-## Euploid Embryo Model (Binomial)
+## Euploid Embryo Model (Binomial) {.tabset}
+
+### Model Outputs
 
 ```{r}
 ############################################################
@@ -646,66 +649,62 @@ n_sim <- 5000 # Monte Carlo iterations
 ############################################################
 
 # Aggregate structured egg table to patient-level counts
-euploid_summary = egg_df |>
-  # Remove frozen eggs
-  dplyr::filter(!frozen_egg) |> 
-  dplyr::mutate(success = pgd_clinresult %in% c("Euploid","Normal") & !is.na(pgd_clinresult)) |> 
-  group_by(pat_id) |>
-  reframe(
+euploid_summary <- egg_df |>
+  dplyr::filter(!frozen_egg) |>
+  dplyr::mutate(
+    success = pgd_clinresult %in% c("Euploid", "Normal") & !is.na(pgd_clinresult)
+  ) |>
+  dplyr::group_by(pat_id) |>
+  dplyr::reframe(
     successes = sum(success),
-    number_of_eggs_attempted = n(),
-    age = median(age,na.rm=T),
-    age_group = first(age_group)
+    number_of_eggs_attempted = dplyr::n(),
+    age = median(age, na.rm = TRUE),
+    age_group = dplyr::first(age_group)
   )
 
-# TODO: Check this formula for model two with Brandon - based on Lara's powerpoint, should be ">= embryo ~ age + eggs_retrived". Is that what we're doing here?
-
-# euploid_binom_model = run_binomial_model_with_various_distributions(euploid_summary, formula = "cbind(successes, number_of_eggs_attempted - successes) ~ age")
-
-# m2_binom_model$family$family
-
-euploid_binom_model = glm(
+# Fit binomial model for per-egg euploid probability as a function of age
+euploid_binom_model <- glm(
   cbind(successes, number_of_eggs_attempted - successes) ~ age,
   family = binomial,
   data = euploid_summary
 )
 
-euploid_model_summary = coef(summary(euploid_binom_model)) |>
+validate_model(euploid_binom_model, euploid_summary, 'successes')
+
+# Save coefficient summary
+euploid_model_summary <- coef(summary(euploid_binom_model)) |>
   as.data.frame()
 
-coef_euploid <- coef(euploid_binom_model)
+# Add predicted probabilities
+euploid_summary <- euploid_summary |>
+  dplyr::mutate(
+    pred_p = predict(euploid_binom_model, newdata = euploid_summary, type = "response"),
+    prob_ge1_euploid = 1 - (1 - pred_p)^number_of_eggs_attempted
+  )
 
-alpha <- exp(coef_euploid[1])
-beta <- exp(coef_euploid[2])
+# Simulate outcomes per patient
+set.seed(123)
 
-validate_model(euploid_binom_model, euploid_summary, "successes")
+euploid_sim_results <- euploid_summary |>
+  dplyr::rowwise() |>
+  dplyr::mutate(
+    success_sim = rbinom(1, size = number_of_eggs_attempted, prob = pred_p),
+    ge1_euploid_sim = success_sim >= 1
+  ) |>
+  dplyr::ungroup()
 
-# Add probabilities to egg_df
+# # Plot predicted per-egg probabilities from the model
+# euploid_summary |>
+#   ggplot(aes(x = pred_p)) +
+#   geom_histogram(bins = 30) +
+#   labs(
+#     x = "Predicted Per-Egg Euploid Probability",
+#     title = "Distribution of Predicted Probabilities"
+#   ) +
+#   theme_minimal()
 
-euploid_p = rbeta(n_sim, alpha, beta)
-
-euploid_costs <- run_simulation(euploid_p, cost_per_cycle, payout_amount, n_sim)
-
-data.frame(pred_probs = euploid_p) |>
-  ggplot() +
-  geom_histogram(aes(pred_probs)) + 
-  labs(x = "Simulated Probability", title = paste0("Simulated Probabilities with Monte-Carlo: ",n_sim," simulation runs")) + 
-  theme_minimal()
-
-# Simulate results with egg dataframe.
-euploid_sim_results <- euploid_summary %>%
-  rowwise() %>%
-  mutate(
-    simulated_p = rbeta(1, alpha, beta), # example params
-    success_sim = rbinom(1, size = number_of_eggs_attempted, prob = simulated_p)
-)
-
-print("The following table represents predicted successes or failures at the unique pat_id level based on the euploid binomial model.")
-
-euploid_sim_results |> 
+euploid_sim_results |>
   DT::datatable()
-
-
 ```
 
 ### Simulated Probabilities averaged by Age Group
@@ -713,14 +712,13 @@ euploid_sim_results |>
 euploid_sim_results |> 
   dplyr::group_by(age_group) |> 
   dplyr::reframe(
-    simulated_p_mean = mean(simulated_p, na.rm = TRUE),
-    simulated_p_median = median(simulated_p, na.rm = TRUE)
+    pct_1_plus_euploid_sim = mean(ge1_euploid_sim, na.rm = TRUE)
   ) |> 
   dplyr::arrange(age_group) |> 
   knitr::kable()
 ```
 
-### Model with Primary Infertility Diagnosis Added
+### Model with Primary Infertility Diagnosis Added - Model Outputs
 ```{r}
 euploid_summary = egg_df |>
   dplyr::mutate(success = pgd_clinresult %in% c("Euploid","Normal") & !is.na(pgd_clinresult)) |> 
@@ -732,7 +730,8 @@ euploid_summary = egg_df |>
     age_group = first(age_group),
     .groups = "drop"
   ) |> 
-  dplyr::left_join(df |> dplyr::select(pat_id, primary_infertility_diagnosis_cl), by = dplyr::join_by(pat_id))
+  dplyr::left_join(df |> dplyr::select(pat_id, primary_infertility_diagnosis_cl), by = dplyr::join_by(pat_id)) |> 
+  dplyr::filter(!is.na(primary_infertility_diagnosis_cl))
 
 euploid_binom_model = glm(
   cbind(successes, number_of_eggs_attempted - successes) ~ age + primary_infertility_diagnosis_cl,
@@ -750,7 +749,7 @@ coef_euploid <- coef(euploid_binom_model)
 alpha <- exp(coef_euploid[1])
 beta <- exp(coef_euploid[2])
 
-validate_model(euploid_binom_model, euploid_summary, "successes")
+# validate_model(euploid_binom_model, euploid_summary, "successes")
 
 # Add probabilities to egg_df
 
@@ -758,46 +757,56 @@ euploid_p = rbeta(n_sim, alpha, beta)
 
 euploid_costs <- run_simulation(euploid_p, cost_per_cycle, payout_amount, n_sim)
 
-data.frame(pred_probs = euploid_p) |>
-  ggplot() +
-  geom_histogram(aes(pred_probs)) + 
-  labs(x = "Simulated Probability", title = paste0("Simulated Probabilities with Monte-Carlo: ",n_sim," simulation runs")) + 
-  theme_minimal()
+# data.frame(pred_probs = euploid_p) |>
+#   ggplot() +
+#   geom_histogram(aes(pred_probs)) + 
+#   labs(x = "Simulated Probability", title = paste0("Simulated Probabilities with Monte-Carlo: ",n_sim," simulation runs")) + 
+#   theme_minimal()
 
-# Simulate results with egg dataframe.
-euploid_sim_results <- euploid_summary %>%
-  rowwise() %>%
-  mutate(
-    simulated_p = rbeta(1, shape1 = 2, shape2 = 5), # example params
-    success_sim = rbinom(1, size = number_of_eggs_attempted, prob = simulated_p)
-)
+# Add predicted probabilities
+euploid_summary <- euploid_summary |>
+  dplyr::mutate(
+    pred_p = predict(euploid_binom_model, newdata = euploid_summary, type = "response"),
+    prob_ge1_euploid = 1 - (1 - pred_p)^number_of_eggs_attempted
+  )
+
+# Simulate outcomes per patient
+set.seed(123)
+
+euploid_sim_results <- euploid_summary |>
+  dplyr::rowwise() |>
+  dplyr::mutate(
+    success_sim = rbinom(1, size = number_of_eggs_attempted, prob = pred_p),
+    ge1_euploid_sim = success_sim >= 1
+  ) |>
+  dplyr::ungroup()
 
 print("The following table represents predicted successes or failures at the unique pat_id level based on the euploid binomial model.")
 
 euploid_sim_results |> 
   DT::datatable()
 
-
 ```
 
 ### Simulated Probabilities averaged by Age Group with Primary Inf Diagnosis
 ```{r}
 euploid_sim_results |> 
-  dplyr::group_by(age_group) |> 
+  dplyr::group_by(primary_infertility_diagnosis_cl,age_group) |> 
   dplyr::reframe(
-    simulated_p_mean = mean(simulated_p, na.rm = TRUE),
-    simulated_p_median = median(simulated_p, na.rm = TRUE)
+    pct_1_plus_euploid_sim = mean(ge1_euploid_sim, na.rm = TRUE)
   ) |> 
-  dplyr::arrange(age_group) |> 
+  dplyr::arrange(primary_infertility_diagnosis_cl,age_group) |> 
   knitr::kable()
 ```
 
-## Single-cycle Egg Model (Binomial model)
+## Single-cycle Egg Model (Binomial model) {.tabset}
 
 ```{r}
 # Remove rows where amh is unknown.
 df = df |> dplyr::filter(!is.na(amh))
 ```
+
+### Model Outputs
 
 Note: this model uses the patient / cycle-level table and does not currently filter away rows for eggs of cryo_day_2 or cryo_day_3; N of this dataframe is therefore `r nrow(df)`.
 
@@ -816,7 +825,6 @@ single_cycle_egg_df <- df |>
     attempts  = dplyr::n(), # Each row in this table is a treatment cycle, so n() gives us the number of cycles per patient.
     age = first(age),
     age_group = first(age_group),
-    # amh = unique(amh),
     amh = first(amh),
     afc = first(afc)
   )
@@ -835,30 +843,36 @@ s_egg_model_summary = coef(summary(s_egg_model)) |>
 
 coef_s_egg <- coef(s_egg_model)
 
-alpha <- exp(coef_s_egg[1])
-beta <- exp(coef_s_egg[2])
+# alpha <- exp(coef_s_egg[1])
+# beta <- exp(coef_s_egg[2])
 
 # Add probabilities to egg_df
 
-s_egg_p = rbeta(n_sim, alpha, beta)
+# s_egg_p = rbeta(n_sim, alpha, beta)
 
-s_egg_costs <- run_simulation(s_egg_p, cost_per_cycle, payout_amount, n_sim)
+# data.frame(b = s_egg_p) |> 
+#   ggplot() + geom_histogram(aes(b))
 
-data.frame(pred_probs = s_egg_p) |>
-  ggplot() +
-  geom_histogram(aes(pred_probs)) + 
-  labs(x = "Simulated Probability", title = paste0("Simulated Probabilities with Monte-Carlo: ",n_sim," simulation runs")) + 
-  theme_minimal()
+# s_egg_costs <- run_simulation(s_egg_p, cost_per_cycle, payout_amount, n_sim)
+#
 
-# Simulate results with egg dataframe.
-s_egg_sim_results <- single_cycle_egg_df %>%
-  rowwise() %>%
-  mutate(
-    simulated_p = rbeta(1, shape1 = 2, shape2 = 5), # example params
-    success_sim = rbinom(1, size = attempts, prob = simulated_p)
-)
+# Add predicted probabilities
+single_cycle_egg_df <- single_cycle_egg_df |>
+  dplyr::mutate(
+    pred_p = predict(s_egg_model, newdata = single_cycle_egg_df, type = "response"),
+    prob_seven_eggs_or_more = 1 - (1 - pred_p)^(1)
+  )
 
-print("The following table represents predicted successes or failures at the unique pat_id level based on the single-cycle egg  binomial model.")
+# Simulate outcomes per patient
+set.seed(123)
+
+s_egg_sim_results <- single_cycle_egg_df |>
+  dplyr::rowwise() |>
+  dplyr::mutate(
+    success_sim = rbinom(1, size = 1, prob = pred_p),
+    prob_seven_eggs_or_more = success_sim >= 1
+  ) |>
+  dplyr::ungroup()
 
 s_egg_sim_results |> 
   DT::datatable()
@@ -870,14 +884,13 @@ s_egg_sim_results |>
 s_egg_sim_results |> 
   dplyr::group_by(age_group) |> 
   dplyr::reframe(
-    simulated_p_mean = mean(simulated_p, na.rm = TRUE),
-    simulated_p_median = median(simulated_p, na.rm = TRUE)
+    prob_seven_eggs_or_more_sim = mean(prob_seven_eggs_or_more, na.rm = TRUE)
   ) |> 
   dplyr::arrange(age_group) |> 
   knitr::kable()
 ```
 
-### Model with Primary Infertility Diagnosis Added
+### Model with Primary Infertility Diagnosis Added - Model Outputs
 ```{r}
 single_cycle_egg_df <- df |> 
   dplyr::filter(!is.na(afc)) |> 
@@ -888,11 +901,11 @@ single_cycle_egg_df <- df |>
     attempts  = dplyr::n(), # Each row in this table is a treatment cycle, so n() gives us the number of cycles per patient.
     age = first(age),
     age_group = first(age_group),
-    # amh = unique(amh),
     amh = first(amh),
     afc = first(afc)
   ) |> 
-  dplyr::left_join(df |> dplyr::select(pat_id, primary_infertility_diagnosis_cl), by = dplyr::join_by(pat_id))
+  dplyr::left_join(df |> dplyr::select(pat_id, primary_infertility_diagnosis_cl), by = dplyr::join_by(pat_id)) |> 
+  dplyr::filter(!is.na(primary_infertility_diagnosis_cl))
 
 # If we fall back to a standard binomial model instead, it works:
 s_egg_model = glm(
@@ -906,32 +919,42 @@ validate_model(s_egg_model, single_cycle_egg_df, 'successes')
 s_egg_model_summary = coef(summary(s_egg_model)) |>
   as.data.frame()
 
-coef_s_egg <- coef(s_egg_model)
+# coef_s_egg <- coef(s_egg_model)
+# 
+# alpha <- exp(coef_s_egg[1])
+# beta <- exp(coef_s_egg[2])
 
-alpha <- exp(coef_s_egg[1])
-beta <- exp(coef_s_egg[2])
-
-validate_model(s_egg_model, single_cycle_egg_df, "successes")
+# validate_model(s_egg_model, single_cycle_egg_df, "successes")
 
 # Add probabilities to egg_df
 
-s_egg_p = rbeta(n_sim, alpha, beta)
+# s_egg_p = rbeta(n_sim, alpha, beta)
+# 
+# s_egg_costs <- run_simulation(s_egg_p, cost_per_cycle, payout_amount, n_sim)
 
-s_egg_costs <- run_simulation(s_egg_p, cost_per_cycle, payout_amount, n_sim)
+# data.frame(pred_probs = s_egg_p) |>
+#   ggplot() +
+#   geom_histogram(aes(pred_probs)) + 
+#   labs(x = "Simulated Probability", title = paste0("Simulated Probabilities with Monte-Carlo: ",n_sim," simulation runs")) + 
+#   theme_minimal()
 
-data.frame(pred_probs = s_egg_p) |>
-  ggplot() +
-  geom_histogram(aes(pred_probs)) + 
-  labs(x = "Simulated Probability", title = paste0("Simulated Probabilities with Monte-Carlo: ",n_sim," simulation runs")) + 
-  theme_minimal()
+# Add predicted probabilities
+single_cycle_egg_df <- single_cycle_egg_df |>
+  dplyr::mutate(
+    pred_p = predict(s_egg_model, newdata = single_cycle_egg_df, type = "response"),
+    prob_seven_eggs_or_more = 1 - (1 - pred_p)^(1)
+  )
 
-# Simulate results with egg dataframe.
-s_egg_sim_results <- single_cycle_egg_df %>%
-  rowwise() %>%
-  mutate(
-    simulated_p = rbeta(1, shape1 = 2, shape2 = 5), # example params
-    success_sim = rbinom(1, size = attempts, prob = simulated_p)
-)
+# Simulate outcomes per patient
+set.seed(123)
+
+s_egg_sim_results <- single_cycle_egg_df |>
+  dplyr::rowwise() |>
+  dplyr::mutate(
+    success_sim = rbinom(1, size = 1, prob = pred_p),
+    prob_seven_eggs_or_more = success_sim >= 1
+  ) |>
+  dplyr::ungroup()
 
 print("The following table represents predicted successes or failures at the unique pat_id level based on the single-cycle egg  binomial model.")
 
@@ -945,17 +968,18 @@ s_egg_sim_results |>
 s_egg_sim_results |> 
   dplyr::group_by(primary_infertility_diagnosis_cl,age_group) |> 
   dplyr::reframe(
-    simulated_p_mean = mean(simulated_p, na.rm = TRUE),
-    simulated_p_median = median(simulated_p, na.rm = TRUE)
+    prob_seven_eggs_or_more_sim = mean(prob_seven_eggs_or_more, na.rm = TRUE)
   ) |> 
   dplyr::arrange(primary_infertility_diagnosis_cl,age_group) |> 
   knitr::kable()
 ```
 
-## Two-cycle Egg Model (Binomial model)
+## Two-cycle Egg Model (Binomial model) {.tabset}
 
 Note: this model includes only patients that have more than one treatment recorded in the dataset.
 Note: this model assumes that treatments that occur within 365 days belong to a single treatment course, i.e. a collection of cycles including cycle 1, cycle 2, etc.; this assumption was necessary to compute this model because the dataset lacks a variable that otherwise links treatments across time. We could modify this assumption by removing this 365-day date proximity threshold, though this may incorrectly imply relatedness between distinct treatments performed by a patient across multiple years.
+
+### Model Outputs
 
 ```{r}
 
@@ -972,6 +996,7 @@ df_multiple = df |>
 # the total number of eggs per patient, 
 df_multiple = df_multiple |> 
   dplyr::group_by(pat_id, treat_course_id) |>
+  # Only include the first two rows in any given treatment course ID.
   dplyr::reframe(
     total_eggs_in_treat_course = sum(num_eggs_collected),
     total_cycles_in_treat_course = max(cycle_number),
@@ -997,51 +1022,68 @@ validate_model(two_egg_model, df_multiple, 'successes')
 two_egg_model_summary = coef(summary(two_egg_model)) |>
   as.data.frame()
 
-coef_two_egg <- coef(two_egg_model)
+# coef_two_egg <- coef(two_egg_model)
+# 
+# alpha <- exp(coef_two_egg[1])
+# beta <- exp(coef_two_egg[2])
+# 
+# # Add probabilities to egg_df
+# 
+# two_egg_p = rbeta(n_sim, alpha, beta)
+# 
+# two_egg_costs <- run_simulation(two_egg_p, cost_per_cycle, payout_amount, n_sim)
+# 
+# data.frame(pred_probs = two_egg_p) |>
+#   ggplot() +
+#   geom_histogram(aes(pred_probs)) + 
+#   labs(x = "Simulated Probability", title = paste0("Simulated Probabilities with Monte-Carlo: ",n_sim," simulation runs")) + 
+#   theme_minimal()
 
-alpha <- exp(coef_two_egg[1])
-beta <- exp(coef_two_egg[2])
+# Add predicted probabilities
+df_multiple <- df_multiple |>
+  dplyr::mutate(
+    pred_p = predict(two_egg_model, newdata = df_multiple, type = "response"),
+    prob_fifteen_eggs_or_more = 1 - (1 - pred_p)^(1)
+  )
 
-# Add probabilities to egg_df
+# Simulate outcomes per patient
+set.seed(123)
 
-two_egg_p = rbeta(n_sim, alpha, beta)
+df_multiple_sim_results <- df_multiple |>
+  dplyr::rowwise() |>
+  dplyr::mutate(
+    success_sim = rbinom(1, size = 1, prob = pred_p),
+    prob_fifteen_eggs_or_more = success_sim >= 1
+  ) |>
+  dplyr::ungroup()
 
-two_egg_costs <- run_simulation(two_egg_p, cost_per_cycle, payout_amount, n_sim)
-
-data.frame(pred_probs = two_egg_p) |>
-  ggplot() +
-  geom_histogram(aes(pred_probs)) + 
-  labs(x = "Simulated Probability", title = paste0("Simulated Probabilities with Monte-Carlo: ",n_sim," simulation runs")) + 
-  theme_minimal()
-
-# Simulate results with egg dataframe.
-two_egg_sim_results <- df_multiple %>%
-  rowwise() %>%
-  mutate(
-    simulated_p = rbeta(1, alpha, beta), # example params
-    success_sim = rbinom(1, size = attempts, prob = simulated_p)
-)
+# # Simulate results with egg dataframe.
+# two_egg_sim_results <- df_multiple %>%
+#   rowwise() %>%
+#   mutate(
+#     simulated_p = rbeta(1, alpha, beta), # example params
+#     success_sim = rbinom(1, size = attempts, prob = simulated_p)
+# )
 
 print("The following table represents predicted successes or failures at the unique pat_id level based on the single-cycle egg  binomial model.")
 
-two_egg_sim_results |> 
+df_multiple_sim_results |> 
   DT::datatable()
 
 ```
 
 ### Simulated Probabilities averaged by Age Group
 ```{r}
-two_egg_sim_results |> 
+df_multiple_sim_results |> 
   dplyr::group_by(age_group) |> 
   dplyr::reframe(
-    simulated_p_mean = mean(simulated_p, na.rm = TRUE),
-    simulated_p_median = median(simulated_p, na.rm = TRUE)
+    prob_fifteen_eggs_or_more_sim = mean(success_sim, na.rm = TRUE)
   ) |> 
   dplyr::arrange(age_group) |> 
   knitr::kable()
 ```
 
-### Model with Primary Infertility Diagnosis Added
+### Model with Primary Infertility Diagnosis Added - Model Outputs
 ```{r}
 df_multiple = df |> 
   dplyr::group_by(pat_id,primary_infertility_diagnosis_cl) |> 
@@ -1061,11 +1103,15 @@ df_multiple = df |>
     attempts = dplyr::n()
   ) |>
   dplyr::mutate(successes = total_eggs_in_treat_course >= threshold_two) |> 
-  dplyr::arrange(pat_id)
+  dplyr::arrange(pat_id) |> 
+  dplyr::filter(!is.na(primary_infertility_diagnosis_cl),
+                !is.na(age),
+                !is.na(afc),
+                !is.na(amh))
 
 # If we fall back to a standard binomial model instead, it works:
 two_egg_model = glm(
-    successes ~ age + amh + afc + primary,
+    successes ~ age + amh + afc + primary_infertility_diagnosis_cl,
     family = binomial,
     data = df_multiple
   )
@@ -1075,47 +1121,62 @@ validate_model(two_egg_model, df_multiple, 'successes')
 two_egg_model_summary = coef(summary(two_egg_model)) |>
   as.data.frame()
 
-coef_two_egg <- coef(two_egg_model)
+# coef_two_egg <- coef(two_egg_model)
+# 
+# alpha <- exp(coef_two_egg[1])
+# beta <- exp(coef_two_egg[2])
+# 
+# # validate_model(two_egg_model, df_multiple, "successes")
+# 
+# # Add probabilities to egg_df
+# 
+# two_egg_p = rbeta(n_sim, alpha, beta)
+# 
+# two_egg_costs <- run_simulation(two_egg_p, cost_per_cycle, payout_amount, n_sim)
+# 
+# data.frame(pred_probs = two_egg_p) |>
+#   ggplot() +
+#   geom_histogram(aes(pred_probs)) + 
+#   labs(x = "Simulated Probability", title = paste0("Simulated Probabilities with Monte-Carlo: ",n_sim," simulation runs")) + 
+#   theme_minimal()
 
-alpha <- exp(coef_two_egg[1])
-beta <- exp(coef_two_egg[2])
+# Add predicted probabilities
+df_multiple <- df_multiple |>
+  dplyr::mutate(
+    pred_p = predict(two_egg_model, newdata = df_multiple, type = "response"),
+    prob_fifteen_eggs_or_more = 1 - (1 - pred_p)^(1)
+  )
 
-validate_model(two_egg_model, df_multiple, "successes")
+# Simulate outcomes per patient
+set.seed(123)
 
-# Add probabilities to egg_df
+df_multiple_sim_results <- df_multiple |>
+  dplyr::rowwise() |>
+  dplyr::mutate(
+    success_sim = rbinom(1, size = 1, prob = pred_p),
+    prob_fifteen_eggs_or_more = success_sim >= 1
+  ) |>
+  dplyr::ungroup()
 
-two_egg_p = rbeta(n_sim, alpha, beta)
+# # Simulate results with egg dataframe.
+# two_egg_sim_results <- df_multiple %>%
+#   rowwise() %>%
+#   mutate(
+#     simulated_p = rbeta(1, alpha, beta), # example params
+#     success_sim = rbinom(1, size = attempts, prob = simulated_p)
+# )
 
-two_egg_costs <- run_simulation(two_egg_p, cost_per_cycle, payout_amount, n_sim)
-
-data.frame(pred_probs = two_egg_p) |>
-  ggplot() +
-  geom_histogram(aes(pred_probs)) + 
-  labs(x = "Simulated Probability", title = paste0("Simulated Probabilities with Monte-Carlo: ",n_sim," simulation runs")) + 
-  theme_minimal()
-
-# Simulate results with egg dataframe.
-two_egg_sim_results <- df_multiple %>%
-  rowwise() %>%
-  mutate(
-    simulated_p = rbeta(1, shape1 = 2, shape2 = 5), # example params
-    success_sim = rbinom(1, size = attempts, prob = simulated_p)
-)
-
-print("The following table represents predicted successes or failures at the unique pat_id level based on the single-cycle egg  binomial model.")
-
-two_egg_sim_results |> 
+df_multiple_sim_results |> 
   DT::datatable()
 
 ```
 
 ### Simulated Probabilities averaged by Age Group with Primary Inf Diagnosis
 ```{r}
-two_egg_sim_results |> 
+df_multiple_sim_results |> 
   dplyr::group_by(primary_infertility_diagnosis_cl,age_group) |> 
   dplyr::reframe(
-    simulated_p_mean = mean(simulated_p, na.rm = TRUE),
-    simulated_p_median = median(simulated_p, na.rm = TRUE)
+    prob_fifteen_eggs_or_more_sim = mean(success_sim, na.rm = TRUE)
   ) |> 
   dplyr::arrange(primary_infertility_diagnosis_cl,age_group) |> 
   knitr::kable()
@@ -1132,40 +1193,42 @@ calc_pricing <- function(costs) {
   )
 }
 
-euploid_results <- calc_pricing(euploid_costs)
-egg_results <- calc_pricing(egg_costs)
-two_results <- calc_pricing(two_costs)
+# euploid_results <- calc_pricing(euploid_costs)
+# egg_results <- calc_pricing(s_egg_costs)
+# two_results <- calc_pricing(two_egg_costs)
 
 ```
 
-## Final Comparison
+
 
 ```{r}
 
-# final_results <- dplyr::bind_rows(
-#   euploid_results %>% dplyr::mutate(model = "Euploid"),
-#   egg_results %>% dplyr::mutate(model = "Single Egg"),
-#   egg_results_age_group %>% dplyr::mutate(model = "Single Egg (age group)"),
-#   two_egg_results %>% dplyr::mutate(model = "Two Cycle Egg"),
-#   two_egg_results_age_group %>% dplyr::mutate(model = "Two Cycle Egg (age group)"),
+# ## Final Comparison
+# 
+# # final_results <- dplyr::bind_rows(
+# #   euploid_results %>% dplyr::mutate(model = "Euploid"),
+# #   egg_results %>% dplyr::mutate(model = "Single Egg"),
+# #   egg_results_age_group %>% dplyr::mutate(model = "Single Egg (age group)"),
+# #   two_egg_results %>% dplyr::mutate(model = "Two Cycle Egg"),
+# #   two_egg_results_age_group %>% dplyr::mutate(model = "Two Cycle Egg (age group)"),
+# # )
+# # 
+# # row.names(final_results) = NULL
+# # 
+# # final_results |> 
+# #   knitr::kable()
+# final_results <- bind_rows(
+#   euploid_results %>% mutate(model = "Euploid"),
+#   egg_results %>% mutate(model = "Single Egg"),
+#   two_results %>% mutate(model = "Two Cycle Egg")
 # )
 # 
 # row.names(final_results) = NULL
 # 
-# final_results |> 
-#   knitr::kable()
-final_results <- bind_rows(
-  euploid_results %>% mutate(model = "Euploid"),
-  egg_results %>% mutate(model = "Single Egg"),
-  two_results %>% mutate(model = "Two Cycle Egg")
-)
-
-row.names(final_results) = NULL
-
-final_results = final_results |> 
-  dplyr::mutate(dplyr::across(-model, \(x) scales::dollar(x)))
-
-knitr::kable(final_results)
+# final_results = final_results |> 
+#   dplyr::mutate(dplyr::across(-model, \(x) scales::dollar(x)))
+# 
+# knitr::kable(final_results)
 
 ############################################################
 # END
@@ -1174,41 +1237,41 @@ knitr::kable(final_results)
 
 ```{r put_results_in_excel_file}
 # Create new workbook here in R
-my_wb = openxlsx::createWorkbook()
-
-# Add worksheets / tabs to excel file.
-openxlsx::addWorksheet(my_wb, 'desc_preg_rates')
-openxlsx::addWorksheet(my_wb, 'binom_logist_model')
-openxlsx::addWorksheet(my_wb, 'pred_probabilities')
-openxlsx::addWorksheet(my_wb, 'multi_cycle_succ')
-openxlsx::addWorksheet(my_wb, 'atmpt_lvl_model')
-openxlsx::addWorksheet(my_wb, 'pred_prob_by_atmpt')
-openxlsx::addWorksheet(my_wb, 'multi_cycle_var_prob')
-openxlsx::addWorksheet(my_wb, 'quasi_binom_model')
-openxlsx::addWorksheet(my_wb, 'extract_params')
-openxlsx::addWorksheet(my_wb, 'simul_actuar_outcomes')
-openxlsx::addWorksheet(my_wb, 'insurance_metrics')
-openxlsx::addWorksheet(my_wb, 'final_comparison')
-
-# Put results into each tab.
-openxlsx::writeData(my_wb, 'desc_preg_rates', pregnancy_rates)
-openxlsx::writeData(my_wb, 'binom_logist_model', logit_summary)
-openxlsx::writeData(my_wb, 'pred_probabilities', predicted_probs)
-openxlsx::writeData(my_wb, 'multi_cycle_succ', multi_cycle)
-openxlsx::writeData(my_wb, 'atmpt_lvl_model', attempt_summary)
-openxlsx::writeData(my_wb, 'pred_prob_by_atmpt', attempt_predictions)
-openxlsx::writeData(my_wb, 'multi_cycle_var_prob', multi_cycle_dynamic)
-openxlsx::writeData(my_wb, 'quasi_binom_model', quasi_binom_model_summary)
-openxlsx::writeData(my_wb, 'extract_params', coef_bb)
-openxlsx::writeData(my_wb, 'simul_actuar_outcomes', sim_results)
-openxlsx::writeData(my_wb, 'insurance_metrics', insurance_metrics)
-openxlsx::writeData(my_wb, 'final_comparison', final_results)
-
-# Ensure each column is wide enough to hold its contents
-openxlsx::sheets(my_wb) |> 
-  purrr::iwalk( ~ {
-    openxlsx::setColWidths(my_wb, sheet = .x, cols = 1:10, widths = 'auto')
-  })
-
-openxlsx::saveWorkbook(my_wb, file = "outputs/model_results.xlsx", overwrite = T)
+# my_wb = openxlsx::createWorkbook()
+# 
+# # Add worksheets / tabs to excel file.
+# openxlsx::addWorksheet(my_wb, 'desc_preg_rates')
+# openxlsx::addWorksheet(my_wb, 'binom_logist_model')
+# openxlsx::addWorksheet(my_wb, 'pred_probabilities')
+# openxlsx::addWorksheet(my_wb, 'multi_cycle_succ')
+# openxlsx::addWorksheet(my_wb, 'atmpt_lvl_model')
+# openxlsx::addWorksheet(my_wb, 'pred_prob_by_atmpt')
+# openxlsx::addWorksheet(my_wb, 'multi_cycle_var_prob')
+# openxlsx::addWorksheet(my_wb, 'quasi_binom_model')
+# openxlsx::addWorksheet(my_wb, 'extract_params')
+# openxlsx::addWorksheet(my_wb, 'simul_actuar_outcomes')
+# openxlsx::addWorksheet(my_wb, 'insurance_metrics')
+# openxlsx::addWorksheet(my_wb, 'final_comparison')
+# 
+# # Put results into each tab.
+# openxlsx::writeData(my_wb, 'desc_preg_rates', pregnancy_rates)
+# openxlsx::writeData(my_wb, 'binom_logist_model', logit_summary)
+# openxlsx::writeData(my_wb, 'pred_probabilities', predicted_probs)
+# openxlsx::writeData(my_wb, 'multi_cycle_succ', multi_cycle)
+# openxlsx::writeData(my_wb, 'atmpt_lvl_model', attempt_summary)
+# openxlsx::writeData(my_wb, 'pred_prob_by_atmpt', attempt_predictions)
+# openxlsx::writeData(my_wb, 'multi_cycle_var_prob', multi_cycle_dynamic)
+# openxlsx::writeData(my_wb, 'quasi_binom_model', quasi_binom_model_summary)
+# openxlsx::writeData(my_wb, 'extract_params', coef_bb)
+# openxlsx::writeData(my_wb, 'simul_actuar_outcomes', sim_results)
+# openxlsx::writeData(my_wb, 'insurance_metrics', insurance_metrics)
+# openxlsx::writeData(my_wb, 'final_comparison', final_results)
+# 
+# # Ensure each column is wide enough to hold its contents
+# openxlsx::sheets(my_wb) |> 
+#   purrr::iwalk( ~ {
+#     openxlsx::setColWidths(my_wb, sheet = .x, cols = 1:10, widths = 'auto')
+#   })
+# 
+# openxlsx::saveWorkbook(my_wb, file = "outputs/model_results.xlsx", overwrite = T)
 ```

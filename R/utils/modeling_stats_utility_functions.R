@@ -82,7 +82,7 @@ run_binomial_model_with_various_distributions = function(dat, formula){
 ############################################################
 
 validate_model <- function(model, data, outcome_var) {
-  
+
   pred <- predict(model, type = "response")
   
   # AUC
@@ -92,7 +92,7 @@ validate_model <- function(model, data, outcome_var) {
   if(lvls_outcome == 2){
     roc_obj <- roc(data[[outcome_var]], pred)
   } else {
-    roc_obj <- multiclass.roc(data[[outcome_var]], pred)
+    roc_obj <- multiclass.roc(data[[outcome_var]], pred) |> suppressMessages()
   }
   
   auc_val <- auc(roc_obj)
@@ -109,7 +109,7 @@ validate_model <- function(model, data, outcome_var) {
   
   print(paste("AUC:", auc_val))
   print(paste("Dispersion:", dispersion))
-  print(calib)
+  # print(calib)
   return(calib)
 }
 
