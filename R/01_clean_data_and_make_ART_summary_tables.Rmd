@@ -59,7 +59,7 @@ row_count_tbl = add_filter_step(row_count_tbl, treat_w_egg_and_embryo, "Cleaned 
 
 ```
 
-
+```{r filter_dataset_of_cryo_day_2_or_3_and_add_frozen_vars}
 treat_w_egg_and_embryo <- treat_w_egg_and_embryo %>%
   mutate(
     frozen_egg = coalesce(cryo_day_0 == TRUE, FALSE),
@@ -69,8 +69,13 @@ treat_w_egg_and_embryo <- treat_w_egg_and_embryo %>%
     )
   )
 
+treat_w_egg_and_embryo = treat_w_egg_and_embryo |> 
+  dplyr::mutate(cryo_day_2 = tidyr::replace_na(cryo_day_2, FALSE),
+                cryo_day_3 = tidyr::replace_na(cryo_day_3, FALSE)) |> 
+  dplyr::filter(!cryo_day_2, !cryo_day_3)
 
-
+row_count_tbl = add_filter_step(row_count_tbl, treat_w_egg_and_embryo, "Dropped rows where cryo_day_2 or cryo_day_3 was TRUE (as per Adam W's advice)")
+```
 
 ```{r}
 # Prior to any filtering, these are the levels of the treatment variable.
@@ -106,17 +111,17 @@ row_count_tbl = add_filter_step(row_count_tbl, treat_w_egg_and_embryo, "Filtered
 
 grouping_vars = c('pat_id','tx_id','tx_cycle')
 
-  # Add a categorical binned version of age.
-treat_w_egg_and_embryo = treat_w_egg_and_embryo |>
-  dplyr::mutate(age_bin = dplyr::case_when(
-    age > 42 ~ ">42",
-    age > 40 ~ "41-42",
-    age > 37 ~ "38-40",
-    age > 34 ~ "35-37",
-    age < 35 ~ "<35",
-    T ~ "Unknown"
-  )) |> 
-  dplyr::mutate(age_bin = factor(age_bin, levels = c("Unknown","<35","35-37","38-40","41-42",">42")))
+#   # Add a categorical binned version of age.
+# treat_w_egg_and_embryo = treat_w_egg_and_embryo |>
+#   dplyr::mutate(age_bin = dplyr::case_when(
+#     age > 42 ~ ">42",
+#     age > 40 ~ "41-42",
+#     age > 37 ~ "38-40",
+#     age > 34 ~ "35-37",
+#     age < 35 ~ "<35",
+#     T ~ "Unknown"
+#   )) |> 
+#   dplyr::mutate(age_bin = factor(age_bin, levels = c("Unknown","<35","35-37","38-40","41-42",">42")))
 ```
 
 ```{r}
@@ -156,10 +161,10 @@ cld_filtered <- cld %>%
          # number_m2_eggs,
          # number_2pn_eggs,
          # number_euploid_embryos,
-         donated,
+         # donated,
          num_eggs_collected,
          total_fertilized,
-         thawed_oocyte,
+         # thawed_oocyte,
          num_m2_eggs,
          num_2pn_from_fresh_eggs,
          num_2pn_from_frozen_eggs,
@@ -167,11 +172,10 @@ cld_filtered <- cld %>%
          num_pgds_done,
          num_euploid_blast,
          age,
-         age_bin,
          bmi,
          amh,
          afc,
-         thawed_oocyte,
+         # thawed_oocyte,
          pregnant_bool,
          birth_bool)
 
