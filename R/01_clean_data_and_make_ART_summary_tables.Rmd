@@ -42,7 +42,7 @@ str_egg = str_egg |>
 
 # Narrow columns of raw_embryo_tbl
 raw_embryo_tbl = raw_embryo_tbl |> 
-  dplyr::select(pat_id, egg_id, pregnant, donated, egg_maturity, pronuclei, thawed_oocyte, blast_rating, live_birth_Derive)
+  dplyr::select(pat_id, egg_id, pregnant, egg_maturity, pronuclei, live_birth_Derive)
 
 # Join structured egg tbl on with pat_id and tx_id
 treat_w_egg = treat |> 
@@ -58,6 +58,19 @@ row_count_tbl = list()
 row_count_tbl = add_filter_step(row_count_tbl, treat_w_egg_and_embryo, "Cleaned treatment table from Branch with raw egg and embryo tables joined")
 
 ```
+
+
+treat_w_egg_and_embryo <- treat_w_egg_and_embryo %>%
+  mutate(
+    frozen_egg = coalesce(cryo_day_0 == TRUE, FALSE),
+    frozen_embryo = if_any(
+      c(cryo_day_5, cryo_day_6, cryo_day_7),
+      ~ coalesce(. == TRUE, FALSE)
+    )
+  )
+
+
+
 
 ```{r}
 # Prior to any filtering, these are the levels of the treatment variable.
