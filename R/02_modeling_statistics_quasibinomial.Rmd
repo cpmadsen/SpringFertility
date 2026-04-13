@@ -463,7 +463,7 @@ multi_cycle_dynamic |>
 
 # First aggregate to patient level
 patient_summary <- m1df %>%
-  group_by(pat_id, age) %>%
+  group_by(pat_id, age, age_group) %>%
   summarize(
     attempts = n(),
     successes = as.integer(sum(pregnant)),
@@ -487,50 +487,69 @@ mod1_binom_model_summary = coef(summary(binom_mod)) |>
 
 ```
 
-## Extract Beta Parameters
+<!-- ## Extract Beta Parameters -->
 
 ```{r}
-# Retrieve alpha and beta (shape parameters)
-if(!is.null(mod1_binom_model_summary)){
-  coef_qb <- coef(binom_mod)
-
-  print(coef_qb)
-} else {
-  print("No coefficients can be extracted from binomial model due to above-noted model failure")
-  coef_qb = NULL
-}
+# # Retrieve alpha and beta (shape parameters)
+# if(!is.null(mod1_binom_model_summary)){
+#   coef_qb <- coef(binom_mod)
+# 
+#   print(coef_qb)
+# } else {
+#   print("No coefficients can be extracted from binomial model due to above-noted model failure")
+#   coef_qb = NULL
+# }
 
 ```
 
-## Simulate Actuarial Outcomes
+```{r}
+# # Simulate distribution of success probabilities
+# set.seed(123)
+# 
+# sim_results <- patient_summary %>%
+#   rowwise() %>%
+#   mutate(
+#     simulated_p = rbeta(1, shape1 = 2, shape2 = 5), # example params
+#     success_sim = rbinom(1, size = attempts, prob = simulated_p)
+# )
+# 
+# sim_results |> 
+#   DT::datatable()
+```
 
 ```{r}
-# Simulate distribution of success probabilities
+patient_summary <- patient_summary |>
+  dplyr::mutate(
+    pred_p = predict(binom_mod, newdata = patient_summary, type = "response"),
+    prob_achieve_pregnancy = 1 - (1 - pred_p)
+  )
+
+# Simulate outcomes per patient
 set.seed(123)
 
-sim_results <- patient_summary %>%
-  rowwise() %>%
-  mutate(
-    simulated_p = rbeta(1, shape1 = 2, shape2 = 5), # example params
-    success_sim = rbinom(1, size = attempts, prob = simulated_p)
-)
+pregnancy_sim_results <- patient_summary |>
+  dplyr::rowwise() |>
+  dplyr::mutate(
+    success_sim = rbinom(1, size = 1, prob = pred_p),
+    achieve_pregnancy_sim = success_sim >= 1
+  ) |>
+  dplyr::ungroup()
 
-sim_results |> 
+print("The following table represents predicted successes or failures at the unique pat_id level based on the clinical pregnancy binomial model.")
+
+pregnancy_sim_results |> 
   DT::datatable()
+
 ```
 
-## Final Insurance Metrics
-
+### Simulated Probabilities averaged by Age Group
 ```{r}
-
-# Estimate expected payout probability
-
-insurance_metrics <- multi_cycle_dynamic %>%
-  mutate(
-    expected_payout_prob = failure_prob
-)
-
-insurance_metrics |> 
+pregnancy_sim_results |> 
+  dplyr::group_by(age_group) |> 
+  dplyr::reframe(
+    pct_achieve_pregnancy_sim = mean(achieve_pregnancy_sim, na.rm = TRUE)
+  ) |> 
+  dplyr::arrange(age_group) |> 
   knitr::kable()
 ```
 
