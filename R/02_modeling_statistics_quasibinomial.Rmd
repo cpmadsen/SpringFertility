@@ -1282,49 +1282,84 @@ df_multiple_sim_results |>
 ```
 
 ```{r}
-## Pricing Outputs
+# Pricing Outputs
+calc_pricing <- function(expected_payout_vec, model_name) {
+  tibble::tibble(
+    model = model_name,
+    expected_cost = mean(expected_payout_vec, na.rm = TRUE),
+    var_95 = quantile(expected_payout_vec, 0.95, na.rm = TRUE),
+    premium = expected_cost * (1 + risk_margin + admin_load)
+  )
+}
 
-# calc_pricing <- function(costs) {
-#   data.frame(
-#     expected_cost = mean(costs),
-#     var_95 = quantile(costs, 0.95),
-#     premium = mean(costs) * (1 + risk_margin + admin_load)
-#   )
-# }
-# 
-# euploid_results <- calc_pricing(euploid_costs)
-# egg_results <- calc_pricing(s_egg_costs)
-# two_results <- calc_pricing(two_egg_costs)
+# Use the same payout amount consistently
+payout_amount <- 22000
 
+# 1. Clinical pregnancy model
+pregnancy_costs <- pregnancy_sim_results %>%
+  mutate(
+    pred_fail_p = 1 - pred_p,
+    expected_payout = pred_fail_p * payout_amount
+  )
+
+pregnancy_results <- calc_pricing(
+  expected_payout_vec = pregnancy_costs$expected_payout,
+  model_name = "Clinical Pregnancy"
+)
+
+# 2. Euploid embryo model
+euploid_costs <- euploid_sim_results %>%
+  mutate(
+    pred_fail_p = 1 - prob_ge1_euploid,
+    expected_payout = pred_fail_p * payout_amount
+  )
+
+euploid_results <- calc_pricing(
+  expected_payout_vec = euploid_costs$expected_payout,
+  model_name = "Euploid Embryo"
+)
+
+# 3. Single-cycle egg model
+s_egg_costs <- single_cycle_egg_df %>%
+  mutate(
+    pred_fail_p = 1 - pred_p,
+    expected_payout = pred_fail_p * payout_amount
+  )
+
+egg_results <- calc_pricing(
+  expected_payout_vec = s_egg_costs$expected_payout,
+  model_name = "Single-Cycle Egg"
+)
+
+# 4. Two-cycle egg model
+two_egg_costs <- df_multiple %>%
+  mutate(
+    pred_fail_p = 1 - pred_p,
+    expected_payout = pred_fail_p * payout_amount
+  )
+
+two_results <- calc_pricing(
+  expected_payout_vec = two_egg_costs$expected_payout,
+  model_name = "Two-Cycle Egg"
+)
 ```
 
 ## Final Comparison
 
 ```{r}
-# final_results <- dplyr::bind_rows(
-#   euploid_results %>% dplyr::mutate(model = "Euploid"),
-#   egg_results %>% dplyr::mutate(model = "Single Egg"),
-#   egg_results_age_group %>% dplyr::mutate(model = "Single Egg (age group)"),
-#   two_egg_results %>% dplyr::mutate(model = "Two Cycle Egg"),
-#   two_egg_results_age_group %>% dplyr::mutate(model = "Two Cycle Egg (age group)"),
-# )
-#
-# row.names(final_results) = NULL
-#
-# final_results |>
-#   knitr::kable()
-# final_results <- bind_rows(
-#   euploid_results %>% mutate(model = "Euploid"),
-#   egg_results %>% mutate(model = "Single Egg"),
-#   two_results %>% mutate(model = "Two Cycle Egg")
-# )
-# 
-# row.names(final_results) = NULL
-# 
-# final_results = final_results |>
-#   dplyr::mutate(dplyr::across(-model, \(x) scales::dollar(x)))
-# 
-# knitr::kable(final_results)
+final_results <- bind_rows(
+  pregnancy_results,
+  euploid_results,
+  egg_results,
+  two_results
+) %>%
+  mutate(
+    expected_cost = scales::dollar(expected_cost),
+    var_95 = scales::dollar(var_95),
+    premium = scales::dollar(premium)
+  )
+
+knitr::kable(final_results)
 
 ############################################################
 # END
@@ -1332,42 +1367,63 @@ df_multiple_sim_results |>
 ```
 
 ```{r put_results_in_excel_file}
-# Create new workbook here in R
-# my_wb = openxlsx::createWorkbook()
+# # Create workbook
+# my_wb <- openxlsx::createWorkbook()
 # 
-# # Add worksheets / tabs to excel file.
-# openxlsx::addWorksheet(my_wb, 'desc_preg_rates')
-# openxlsx::addWorksheet(my_wb, 'binom_logist_model')
-# openxlsx::addWorksheet(my_wb, 'pred_probabilities')
-# openxlsx::addWorksheet(my_wb, 'multi_cycle_succ')
-# openxlsx::addWorksheet(my_wb, 'atmpt_lvl_model')
-# openxlsx::addWorksheet(my_wb, 'pred_prob_by_atmpt')
-# openxlsx::addWorksheet(my_wb, 'multi_cycle_var_prob')
-# openxlsx::addWorksheet(my_wb, 'quasi_binom_model')
-# openxlsx::addWorksheet(my_wb, 'extract_params')
-# openxlsx::addWorksheet(my_wb, 'simul_actuar_outcomes')
-# openxlsx::addWorksheet(my_wb, 'insurance_metrics')
-# openxlsx::addWorksheet(my_wb, 'final_comparison')
+# # Add worksheets
+# sheet_names <- c(
+#   "desc_preg_rates",
+#   "binom_logist_model",
+#   "pred_probabilities",
+#   "multi_cycle_succ",
+#   "atmpt_lvl_model",
+#   "pred_prob_by_atmpt",
+#   "multi_cycle_var_prob",
+#   "clinical_preg_model",
+#   "clinical_preg_sim",
+#   "euploid_model",
+#   "euploid_sim",
+#   "single_egg_model",
+#   "single_egg_sim",
+#   "two_egg_model",
+#   "two_egg_sim",
+#   "final_comparison"
+# )
 # 
-# # Put results into each tab.
-# openxlsx::writeData(my_wb, 'desc_preg_rates', pregnancy_rates)
-# openxlsx::writeData(my_wb, 'binom_logist_model', logit_summary)
-# openxlsx::writeData(my_wb, 'pred_probabilities', predicted_probs)
-# openxlsx::writeData(my_wb, 'multi_cycle_succ', multi_cycle)
-# openxlsx::writeData(my_wb, 'atmpt_lvl_model', attempt_summary)
-# openxlsx::writeData(my_wb, 'pred_prob_by_atmpt', attempt_predictions)
-# openxlsx::writeData(my_wb, 'multi_cycle_var_prob', multi_cycle_dynamic)
-# openxlsx::writeData(my_wb, 'quasi_binom_model', quasi_binom_model_summary)
-# openxlsx::writeData(my_wb, 'extract_params', coef_bb)
-# openxlsx::writeData(my_wb, 'simul_actuar_outcomes', sim_results)
-# openxlsx::writeData(my_wb, 'insurance_metrics', insurance_metrics)
-# openxlsx::writeData(my_wb, 'final_comparison', final_results)
+# purrr::walk(sheet_names, ~ openxlsx::addWorksheet(my_wb, .x))
 # 
-# # Ensure each column is wide enough to hold its contents
-# openxlsx::sheets(my_wb) |> 
-#   purrr::iwalk( ~ {
-#     openxlsx::setColWidths(my_wb, sheet = .x, cols = 1:10, widths = 'auto')
-#   })
+# # Write data to each sheet
+# openxlsx::writeData(my_wb, "desc_preg_rates", pregnancy_rates)
+# openxlsx::writeData(my_wb, "binom_logist_model", as.data.frame(logit_summary))
+# openxlsx::writeData(my_wb, "pred_probabilities", predicted_probs)
+# openxlsx::writeData(my_wb, "multi_cycle_succ", multi_cycle)
+# openxlsx::writeData(my_wb, "atmpt_lvl_model", as.data.frame(attempt_summary))
+# openxlsx::writeData(my_wb, "pred_prob_by_atmpt", attempt_predictions)
+# openxlsx::writeData(my_wb, "multi_cycle_var_prob", multi_cycle_dynamic)
 # 
-# openxlsx::saveWorkbook(my_wb, file = "outputs/model_results.xlsx", overwrite = T)
+# openxlsx::writeData(my_wb, "clinical_preg_model", as.data.frame(mod1_binom_model_summary))
+# openxlsx::writeData(my_wb, "clinical_preg_sim", pregnancy_sim_results)
+# 
+# openxlsx::writeData(my_wb, "euploid_model", as.data.frame(euploid_model_summary))
+# openxlsx::writeData(my_wb, "euploid_sim", euploid_sim_results)
+# 
+# openxlsx::writeData(my_wb, "single_egg_model", as.data.frame(s_egg_model_summary))
+# openxlsx::writeData(my_wb, "single_egg_sim", s_egg_sim_results)
+# 
+# openxlsx::writeData(my_wb, "two_egg_model", as.data.frame(two_egg_model_summary))
+# openxlsx::writeData(my_wb, "two_egg_sim", df_multiple_sim_results)
+# 
+# openxlsx::writeData(my_wb, "final_comparison", final_results)
+# 
+# # Auto-fit column widths
+# purrr::walk(sheet_names, ~ {
+#   openxlsx::setColWidths(my_wb, sheet = .x, cols = 1:50, widths = "auto")
+# })
+# 
+# # Save workbook
+# openxlsx::saveWorkbook(
+#   my_wb,
+#   file = "outputs/model_results.xlsx",
+#   overwrite = TRUE
+# )
 ```
