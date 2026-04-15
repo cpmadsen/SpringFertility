@@ -130,16 +130,6 @@ ggplot(df) +
 
 ## Key Variables
 ```{r make_tbl_for_key_variables}
-# Filter dataset for people with frozen eggs.
-# key_var_summary = df |> 
-#   dplyr::mutate(total_2pn_eggs = num_2pn_from_fresh_eggs + num_2pn_from_frozen_eggs) |> 
-#   dplyr::group_by(age_group) |> 
-#   dplyr::reframe(
-#     dplyr::across(
-#       .cols = c(bmi, age, amh, afc, num_euploid_blast, num_eggs_collected, num_m2_eggs, total_2pn_eggs),
-#       \(x) median(x,na.rm=T),.names = "median_{.col}"
-#     )
-#   )
 var_summary <- df %>%
   mutate(
     total_2pn_eggs = num_2pn_from_fresh_eggs + num_2pn_from_frozen_eggs
@@ -488,7 +478,6 @@ multi_cycle_dynamic <- attempt_predictions %>%
 
 multi_cycle_dynamic |> 
   knitr::kable()
-
 ```
 
 ## Binomial Model (Actuarial model)
@@ -582,61 +571,41 @@ pregnancy_sim_results |>
 
 ### Plot of simulated payout
 ```{r}
-# # Bin the AMH values.
-# pregnancy_sim_results = pregnancy_sim_results |> 
-#   dplyr::mutate(amh_bin = dplyr::case_when(
-#       amh < 0.5 ~ "Very low",
-#       amh >= 0.5 & amh < 1.0 ~ "Low",
-#       amh >= 1.0 & amh <= 3.0 ~ "Normal",
-#       amh > 3.0 ~ "High",
-#       is.na(amh) ~ "Unknown",
-#       T ~ "EDGECASE"
-#     )
-#   ) |> 
-#   dplyr::mutate(amh_bin = factor(amh_bin, levels = c("Very low","Low","Normal","High","Unknown")))
+payout_amount <- 22000
 
-# Uses simulated successes or failures
-# p1_df = pregnancy_sim_results |>
-#   dplyr::mutate(failure_sim = ifelse(success_sim == 1, 0, 1)) |>
-#   dplyr::mutate(payout_amt = failure_sim * 20000) |>  # Arbitrary amount of payout!
-#   dplyr::group_by(age) |>
-#   dplyr::reframe(mean_sim_payout = mean(payout_amt, na.rm=T),
-#                  total_sim_payout = sum(payout_amt, na.rm=T),
-#                  sd_sim_payout = sd(payout_amt, na.rm=T),
-#                  number_patients = dplyr::n()) |>
-#   dplyr::mutate(mean_payout_per_person = total_sim_payout / number_patients)
-# 
-# p1_df |> 
-#   ggplot(aes(x = age, y = mean_sim_payout)) +
-#   geom_smooth() +
-#   # geom_smooth(aes(group = amh_bin, colour = amh_bin), method = 'lm') +
-#   geom_point() + 
-#   # facet_wrap( ~ amh_bin, ncol = 1) +
-#   labs(y = "Total Simulated Payout by Age", colour = 'AMH bin', x = "Age") +
-#   scale_y_continuous(labels = scales::dollar) +
-#   scale_x_continuous(limits = c(30,42)) + 
-#   theme_minimal()
+p1_df <- pregnancy_sim_results %>%
+  mutate(
+    pred_fail_p = 1 - pred_p,
+    pred_payout = pred_fail_p * payout_amount
+  ) %>%
+  group_by(age) %>%
+  summarise(
+    mean_pred_payout = mean(pred_payout, na.rm = TRUE),
+    sd_pred_payout = sd(pred_payout, na.rm = TRUE),
+    number_patients = n(),
+    .groups = "drop"
+  )
 
-
-p1_df = pregnancy_sim_results |> 
-  dplyr::mutate(pred_fail_p = 1 - pred_p) |> 
-  dplyr::mutate(pred_payout = pred_fail_p * 20000) |>  # Arbitrary amount of payout!
-  dplyr::group_by(age) |> 
-  dplyr::reframe(mean_pred_payout = mean(pred_payout, na.rm=T),
-                 sd_pred_payout = sd(pred_payout,na.rm=T),
-                 number_patients = dplyr::n())
-
-p1_df |> 
+p1_df %>%
   ggplot(aes(x = age, y = mean_pred_payout)) +
-  geom_smooth() +
-  # geom_smooth(aes(group = amh_bin, colour = amh_bin), method = 'lm') +
-  geom_point() + 
-  # facet_wrap( ~ amh_bin, ncol = 1) +
-  labs(y = "Total Simulated Payout by Age", colour = 'AMH bin', x = "Age",
-       title = "Clinical Pregnancy Predicted Average Payout") +
-  scale_y_continuous(labels = scales::dollar) +
-  scale_x_continuous(limits = c(30,42), breaks = c(30:42), labels = c(30:42)) + 
-  theme_minimal()
+  geom_smooth(linewidth = 1, color = "#2C7FB8") +
+  geom_point(size = 2.5, color = "#2C7FB8", alpha = 0.8) +
+  labs(
+    title = "Expected Insurance Payout by Age",
+    subtitle = "Clinical Pregnancy Model",
+    x = "Age (years)",
+    y = "Average Predicted Payout ($)"
+  ) +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  scale_x_continuous(limits = c(30, 42), breaks = 30:42) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12, color = "gray40"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "gray20"),
+    panel.grid.minor = element_blank()
+  )
 ```
 
 ### Simulated Probabilities averaged by Age Group
@@ -789,6 +758,45 @@ euploid_sim_results |>
   ) |> 
   dplyr::arrange(age_group) |> 
   knitr::kable()
+```
+
+### Plot of simulated payout
+```{r}
+payout_amount <- 22000
+
+eup_df <- euploid_sim_results %>%
+  mutate(
+    pred_fail_p = 1 - prob_ge1_euploid,
+    pred_payout = pred_fail_p * payout_amount
+  ) %>%
+  group_by(age) %>%
+  summarise(
+    mean_pred_payout = mean(pred_payout, na.rm = TRUE),
+    sd_pred_payout = sd(pred_payout, na.rm = TRUE),
+    number_patients = n(),
+    .groups = "drop"
+  )
+
+eup_df %>%
+  ggplot(aes(x = age, y = mean_pred_payout)) +
+  geom_smooth(linewidth = 1, color = "#2C7FB8") +
+  geom_point(size = 2.5, color = "#2C7FB8", alpha = 0.8) +
+  labs(
+    title = "Expected Insurance Payout by Age",
+    subtitle = "Euploid Embryo Model",
+    x = "Age (years)",
+    y = "Average Predicted Payout ($)"
+  ) +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  scale_x_continuous(limits = c(30, 42), breaks = 30:42) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12, color = "gray40"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "gray20"),
+    panel.grid.minor = element_blank()
+  )
 ```
 
 ### Model with Primary Infertility Diagnosis Added - Model Outputs
