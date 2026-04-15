@@ -1,0 +1,263 @@
+---
+title: "Insurance Modeling Analysis"
+author: "Charm Economics"
+date: "`r Sys.Date()`"
+output: 
+  rmdformats::downcute
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+library(dplyr)
+library(ggplot2)
+library(VGAM)
+library(pROC)
+library(ResourceSelection)
+library(knitr)
+library(tidyr)
+set.seed(123)
+```
+
+```{r define_functions}
+source(file.path(here::here(),"R/utils/modeling_stats_utility_functions.R"))
+```
+
+```{r read_in_and_clean_cycle_data, include=F}
+df <- readr::read_rds("data/clean_data/cld_filtered.rds") |> 
+  dplyr::rename(pregnant = pregnant_bool)
+
+egg_df = readr::read_rds("data/clean_data/cleaned_egg_level_df.rds")
+
+df <- df %>%
+  mutate(age_group = case_when(
+    age < 35 ~ "<35",
+    age >= 35 & age <= 37 ~ "35-37",
+    age >= 38 & age <= 40 ~ "38-40",
+    age >= 41 ~ "41+"
+  ))
+
+df$age_group <- as.factor(df$age_group)
+
+# Number of unique PAT ids
+df = df |> dplyr::mutate(the_year = lubridate::year(treatment_start_date))
+```
+
+```{r define_payment_functions}
+# Single Cycle Egg (Tiered)
+payout_egg_single <- function(eggs) {
+  ifelse(eggs <= 2, 0.5,
+        ifelse(eggs <= 4, 0.25,
+                0))
+}
+
+# Multi-Cycle Egg
+payout_egg_multi <- function(total_eggs) {
+  ifelse(total_eggs < 10, 0.5,
+        ifelse(total_eggs < 15, 0.25,
+        0))
+}
+
+# Euploid Embryo
+payout_euploid <- function(has_euploid) {
+  ifelse(has_euploid == 0, 1.0, 0)
+}
+
+# Live Birth
+payout_livebirth <- function(live_birth) {
+  ifelse(live_birth == 0, 1.0, 0)
+}
+
+# Make patient grid.
+ages <- seq(30, 42, by = 2)
+amh_values <- c(0.3, 0.8, 2.0, 4.0)
+
+patient_grid <- expand.grid(
+  age = ages,
+  amh = amh_values
+)
+```
+
+# MODEL 1: SINGLE CYCLE EGG
+```{r}
+results_egg_single <- data.frame()
+
+
+
+for (i in 1:nrow(patient_grid)) {
+
+  print(i)
+  
+  row <- patient_grid[i, ]
+
+  #----- MODEL INPUT REQUIRED  -----#
+  # Replace with your fitted binomial model
+  mu <- predict(nb_model,
+                data.frame(age = row$age, AMH = row$amh),
+                type = "response")
+
+  theta <- nb_model$theta
+  #----- END MODEL INPUT -----#
+
+  eggs <- rnbinom(n_sim, size = theta, mu = mu)
+  payout <- payout_egg_single(eggs)
+
+  results_egg_single <- rbind(results_egg_single,
+                              data.frame(
+                                age = row$age,
+                                amh_cat = row$amh_cat,
+                                expected_payout = mean(payout)
+                              ))
+}
+
+plot_egg_single <- ggplot(results_egg_single,
+                          aes(x = age, y = expected_payout, color = amh_cat)) +
+  geom_line(size = 1.2) +
+  labs(
+    title = "Single Cycle Egg Retrieval: Expected Payout",
+    x = "Age (years)",
+    y = "Expected Payout (% of Cycle Cost)",
+    color = "AMH Category"
+  ) +
+  theme_minimal()
+```
+
+# MODEL 2: MULTI-CYCLE EGG
+```{r}
+results_egg_multi <- data.frame()
+n_cycles <- 2
+
+for (i in 1:nrow(patient_grid)) {
+
+  row <- patient_grid[i, ]
+
+  #----- MODEL INPUT REQUIRED  -----#
+  # Replace with your fitted binomial model
+  mu <- predict(nb_model,
+                data.frame(age = row$age, AMH = row$amh),
+                type = "response")
+
+  theta <- nb_model$theta
+  #----- END MODEL INPUT -----#
+
+  total_eggs <- replicate(n_sim, {
+    sum(rnbinom(n_cycles, size = theta, mu = mu))
+  })
+
+  payout <- payout_egg_multi(total_eggs)
+
+  results_egg_multi <- rbind(results_egg_multi,
+                             data.frame(
+                               age = row$age,
+                               amh_cat = row$amh_cat,
+                               expected_payout = mean(payout)
+                             ))
+}
+
+plot_egg_multi <- ggplot(results_egg_multi,
+                         aes(x = age, y = expected_payout, color = amh_cat)) +
+  geom_line(size = 1.2) +
+  labs(
+    title = "Multi-Cycle Egg Retrieval: Expected Payout",
+    x = "Age (years)",
+    y = "Expected Payout (% of Total Cost)",
+    color = "AMH Category"
+  ) +
+  theme_minimal()
+```
+
+# MODEL 3: EUPLOID EMBRYO GUARANTEE
+
+```{r}
+
+results_euploid <- data.frame()
+
+for (i in 1:nrow(patient_grid)) {
+
+  row <- patient_grid[i, ]
+
+  #----- MODEL INPUT REQUIRED  -----#
+  # Replace with your fitted binomial model
+  p_euploid <- predict(euploid_model,
+                       data.frame(age = row$age, AMH = row$amh),
+                       type = "response")
+  #----- END MODEL INPUT -----#
+
+  has_euploid <- rbinom(n_sim, 1, p_euploid)
+  payout <- payout_euploid(has_euploid)
+
+  results_euploid <- rbind(results_euploid,
+                           data.frame(
+                             age = row$age,
+                             amh_cat = row$amh_cat,
+                             expected_payout = mean(payout)
+                           ))
+}
+
+plot_euploid <- ggplot(results_euploid,
+                       aes(x = age, y = expected_payout, color = amh_cat)) +
+  geom_line(size = 1.2) +
+  labs(
+    title = "Euploid Embryo Guarantee: Expected Payout",
+    x = "Age (years)",
+    y = "Probability of Payout",
+    color = "AMH Category"
+  ) +
+  theme_minimal()
+```
+
+
+# MODEL 4: CLINICAL PREGNANCY GUARANTEE
+
+```{r}
+results_preg <- data.frame()
+
+for (i in 1:nrow(patient_grid)) {
+
+  row <- patient_grid[i, ]
+
+  #----- MODEL INPUT REQUIRED  -----#
+  # Model predicts probability of clinical pregnancy (pregnant = 1)
+  p_pregnant <- predict(lb_model,
+                        data.frame(age = row$age, AMH = row$amh),
+                        type = "response")
+  #----- END MODEL INPUT -----#
+
+  # Simulate clinical pregnancy outcome
+  clinical_pregnancy <- rbinom(n_sim, 1, p_pregnant)
+
+  # Use as proxy for live birth (can be adjusted later)
+  payout <- payout_preg(clinical_pregnancy)
+
+  results_preg <- rbind(results_preg,
+                             data.frame(
+                               age = row$age,
+                               amh_cat = row$amh_cat,
+                               expected_payout = mean(payout)
+                             ))
+}
+
+plot_preg <- ggplot(results_preg,
+                         aes(x = age, y = expected_payout, color = amh_cat)) +
+  geom_line(size = 1.2) +
+  labs(
+    title = "Clinical Pregnancy Guarantee: Expected Payout",
+    x = "Age (years)",
+    y = "Probability of Payout",
+    color = "AMH Category"
+  ) +
+  theme_minimal()
+```
+
+# DISPLAY ALL PLOTS
+
+```{r}
+print(plot_egg_single)
+print(plot_egg_multi)
+print(plot_euploid)
+print(plot_preg)
+```
+
+
+
