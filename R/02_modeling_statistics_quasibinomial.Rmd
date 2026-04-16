@@ -487,16 +487,21 @@ multi_cycle_dynamic |>
 
 # First aggregate to patient level
 patient_summary <- m1df %>%
-  group_by(pat_id, age, age_group, amh) %>%
+  group_by(pat_id, age, age_group, amh, afc) %>%
   summarize(
     attempts = n(),
     successes = as.integer(sum(pregnant)),
     .groups = "drop"
 )
 
+print(paste0("Dropping rows from patient_summary table that have NA in any predictor variable; row count drops from ",nrow(patient_summary), " to ",nrow(drop_na(patient_summary))))
+
+patient_summary = patient_summary |> 
+  drop_na()
+
 # table(patient_summary$age) |> knitr::kable()
 
-binom_mod = run_binomial_model_with_various_distributions(patient_summary, formula = "cbind(successes, attempts - successes) ~ age") |> 
+binom_mod = run_binomial_model_with_various_distributions(patient_summary, formula = "cbind(successes, attempts - successes) ~ age + amh + afc") |> 
   suppressMessages()
 
 print("Here is the full model validation output:")
@@ -608,14 +613,14 @@ p1_df %>%
   )
 ```
 
-### Simulated Probabilities averaged by Age Group
+### Simulated Probabilities averaged by Age
 ```{r}
 pregnancy_sim_results |> 
-  dplyr::group_by(age_group) |> 
+  dplyr::group_by(age) |> 
   dplyr::reframe(
     pct_achieve_pregnancy_sim = mean(achieve_pregnancy_sim, na.rm = TRUE)
   ) |> 
-  dplyr::arrange(age_group) |> 
+  dplyr::arrange(age) |> 
   knitr::kable()
 ```
 
@@ -638,7 +643,7 @@ egg_df = readr::read_rds("data/clean_data/cleaned_egg_level_df.rds")
 
 # Zoom in on relevant rows, drop rows with no info for age and attempt.
 egg_df = egg_df |> 
-  dplyr::select(pat_id, egg_id, age, attempt, pgd_clinresult, frozen_embryo, frozen_egg) |> 
+  dplyr::select(pat_id, egg_id, age, attempt, pgd_clinresult, frozen_embryo, frozen_egg, afc_other, afc_first_baseline, amh, amh_start) |> 
   dplyr::filter(!is.na(age))
 
 # Calculate age_group
@@ -687,6 +692,8 @@ n_sim <- 5000 # Monte Carlo iterations
 # 1. EUPLOID EMBRYO MODEL (BINOMIAL)
 ############################################################
 
+# We'll need to join AFC and AMH from cycle-level table to egg table.
+
 # Aggregate structured egg table to patient-level counts
 euploid_summary <- egg_df |>
   dplyr::filter(!frozen_egg) |>
@@ -697,13 +704,20 @@ euploid_summary <- egg_df |>
   dplyr::reframe(
     successes = sum(success),
     number_of_eggs_attempted = dplyr::n(),
-    age = median(age, na.rm = TRUE),
-    age_group = dplyr::first(age_group)
+    age = min(age, na.rm = TRUE),
+    age_group = dplyr::first(age_group),
+    mean_afc = mean(afc_first_baseline,na.rm=T),
+    mean_amh = mean(amh,na.rm=T)
   )
+
+print(paste0("Dropping rows from euploid_summary table that have NA in any predictor variable; row count drops from ",nrow(euploid_summary), " to ",nrow(drop_na(euploid_summary))))
+
+euploid_summary = euploid_summary |> 
+  drop_na()
 
 # Fit binomial model for per-egg euploid probability as a function of age
 euploid_binom_model <- glm(
-  cbind(successes, number_of_eggs_attempted - successes) ~ age,
+  cbind(successes, number_of_eggs_attempted - successes) ~ age + mean_afc + mean_amh,
   family = quasibinomial,
   data = euploid_summary
 )
@@ -749,14 +763,14 @@ euploid_sim_results |>
   DT::datatable()
 ```
 
-### Simulated Probabilities averaged by Age Group
+### Simulated Probabilities averaged by Age
 ```{r}
 euploid_sim_results |> 
-  dplyr::group_by(age_group) |> 
+  dplyr::group_by(age) |> 
   dplyr::reframe(
     pct_1_plus_euploid_sim = mean(ge1_euploid_sim, na.rm = TRUE)
   ) |> 
-  dplyr::arrange(age_group) |> 
+  dplyr::arrange(age) |> 
   knitr::kable()
 ```
 
@@ -869,7 +883,7 @@ euploid_sim_results |>
 
 ```
 
-### Simulated Probabilities averaged by Age Group with Primary Inf Diagnosis
+### Simulated Probabilities averaged by Age with Primary Inf Diagnosis
 ```{r}
 euploid_sim_results |> 
   dplyr::group_by(primary_infertility_diagnosis_cl,age_group) |> 
@@ -975,15 +989,15 @@ p3_df |>
   theme_minimal()
 ```
 
-### Simulated Probabilities averaged by Age Group
+### Simulated Probabilities averaged by Age
 ```{r}
 s_egg_sim_results %>%
-  group_by(age_group) %>%
+  group_by(age) %>%
   summarise(
     prob_success = mean(success_sim, na.rm = TRUE),
     .groups = "drop"
   ) %>%
-  arrange(age_group) %>%
+  arrange(age) %>%
   knitr::kable()
 ```
 
@@ -1060,7 +1074,7 @@ s_egg_sim_results |>
 
 ```
 
-### Simulated Probabilities averaged by Age Group with Primary Inf Diagnosis
+### Simulated Probabilities averaged by Age with Primary Inf Diagnosis
 ```{r}
 s_egg_sim_results |> 
   dplyr::group_by(primary_infertility_diagnosis_cl,age_group) |> 
@@ -1170,15 +1184,15 @@ p4_df |>
   theme_minimal()
 ```
 
-### Simulated Probabilities averaged by Age Group
+### Simulated Probabilities averaged by Age
 ```{r}
 df_multiple_sim_results %>%
-  group_by(age_group) %>%
+  group_by(age) %>%
   summarise(
     prob_fifteen_eggs_or_more_sim = mean(success_sim, na.rm = TRUE),
     .groups = "drop"
   ) %>%
-  arrange(age_group) %>%
+  arrange(age) %>%
   knitr::kable()
 ```
 
@@ -1270,7 +1284,7 @@ df_multiple_sim_results |>
 
 ```
 
-### Simulated Probabilities averaged by Age Group with Primary Inf Diagnosis
+### Simulated Probabilities averaged by Age with Primary Inf Diagnosis
 ```{r}
 df_multiple_sim_results |> 
   dplyr::group_by(primary_infertility_diagnosis_cl,age_group) |> 
