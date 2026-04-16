@@ -487,7 +487,16 @@ multi_cycle_dynamic |>
 
 # First aggregate to patient level
 patient_summary <- m1df %>%
-  group_by(pat_id, age, age_group, amh, afc) %>%
+  dplyr::mutate(
+    # AMH bins
+    amh_bin = case_when(
+      amh < 0.5 ~ "Very low",
+      amh >= 0.5 & amh < 1.0 ~ "Low",
+      amh >= 1.0 & amh <= 3.0 ~ "Normal",
+      amh > 3.0 ~ "High"
+    ),
+    amh_bin = factor(amh_bin, levels = c("Very low", "Low", "Normal", "High"))) |> 
+  group_by(pat_id, age, age_group, amh_bin, afc) %>%
   summarize(
     attempts = n(),
     successes = as.integer(sum(pregnant)),
@@ -501,7 +510,7 @@ patient_summary = patient_summary |>
 
 # table(patient_summary$age) |> knitr::kable()
 
-binom_mod = run_binomial_model_with_various_distributions(patient_summary, formula = "cbind(successes, attempts - successes) ~ age + amh + afc") |> 
+binom_mod = run_binomial_model_with_various_distributions(patient_summary, formula = "cbind(successes, attempts - successes) ~ age + amh_bin + afc") |> 
   suppressMessages()
 
 print("Here is the full model validation output:")
@@ -700,14 +709,22 @@ euploid_summary <- egg_df |>
   dplyr::mutate(
     success = pgd_clinresult %in% c("Euploid", "Normal") & !is.na(pgd_clinresult)
   ) |>
-  dplyr::group_by(pat_id) |>
+  dplyr::mutate(
+    # AMH bins
+    amh_bin = case_when(
+      amh < 0.5 ~ "Very low",
+      amh >= 0.5 & amh < 1.0 ~ "Low",
+      amh >= 1.0 & amh <= 3.0 ~ "Normal",
+      amh > 3.0 ~ "High"
+    ),
+    amh_bin = factor(amh_bin, levels = c("Very low", "Low", "Normal", "High"))) |> 
+  dplyr::group_by(pat_id, amh_bin) |>
   dplyr::reframe(
     successes = sum(success),
     number_of_eggs_attempted = dplyr::n(),
     age = min(age, na.rm = TRUE),
     age_group = dplyr::first(age_group),
-    mean_afc = mean(afc_first_baseline,na.rm=T),
-    mean_amh = mean(amh,na.rm=T)
+    afc = mean(afc_first_baseline,na.rm=T)
   )
 
 print(paste0("Dropping rows from euploid_summary table that have NA in any predictor variable; row count drops from ",nrow(euploid_summary), " to ",nrow(drop_na(euploid_summary))))
@@ -717,7 +734,7 @@ euploid_summary = euploid_summary |>
 
 # Fit binomial model for per-egg euploid probability as a function of age
 euploid_binom_model <- glm(
-  cbind(successes, number_of_eggs_attempted - successes) ~ age + mean_afc + mean_amh,
+  cbind(successes, number_of_eggs_attempted - successes) ~ age + afc + amh_bin,
   family = quasibinomial,
   data = euploid_summary
 )
