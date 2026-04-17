@@ -97,11 +97,11 @@ attempt_predictions <- attempt_predictions %>%
     age_group = factor(age_group, levels = c("<35", "35-37", "38-40", "41+"))
   )
 
-age_results <- attempt_predictions %>%
-  arrange(age_group, attempt_num) %>%
-  group_by(age_group) %>%
+age_results <- attempt_predictions_kable %>%
+  arrange(age_display, attempt_num) %>%
+  group_by(age_display) %>%
   summarise(
-    p_vec = list(predicted_p_mean),
+    p_vec = list(predicted_p),
     .groups = "drop"
   )
 
@@ -126,9 +126,9 @@ final_pricing_table <- age_results %>%
       )
     )
   ) %>%
-  dplyr::select(age_group, pricing) %>%
+  dplyr::select(age_display, pricing) %>%
   tidyr::unnest(pricing) %>%
-  arrange(age_group, cycles_covered)
+  arrange(age_display, cycles_covered)
 
 ##############################
 # 5. PRESENTATION TABLE
@@ -145,7 +145,7 @@ presentation_table <- final_pricing_table %>%
     premium = round(premium, 0)
   ) %>%
   dplyr::select(
-    age_group,
+    age_display,
     cycles_covered,
     success_prob,
     failure_prob,
@@ -155,7 +155,7 @@ presentation_table <- final_pricing_table %>%
     total_expected_cost,
     premium
   ) %>%
-  dplyr::arrange(age_group, cycles_covered)
+  dplyr::arrange(age_display, cycles_covered)
 
 print(presentation_table)
 

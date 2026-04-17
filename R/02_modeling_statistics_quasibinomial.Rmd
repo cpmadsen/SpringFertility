@@ -452,49 +452,66 @@ cycle_seq <- sort(unique(df_attempt_recalc$attempt_num))
 cycle_seq <- cycle_seq[cycle_seq <= 3]
 
 # Calculate predicted probabilities given AFC/AMH per unique combination of age/cycle to maintain in-group distribution
-attempt_predictions <- purrr::map_dfr(cycle_seq, function(cyc) {
-  purrr::map_dfr(age_seq, function(a) {
-    
-    newdata <- df_attempt_recalc %>%
-      select(afc, amh_bin) %>%
-      mutate(
-        age = a,
-        attempt_num = cyc)
-    newdata$predicted_p <- predict(
-      attempt_model,
-      newdata = newdata,
-      type = "response")
-    tibble(
-      age = a,
-      attempt_num = cyc,
-      predicted_p_mean = mean(newdata$predicted_p, na.rm = TRUE))
-  })
-})
+attempt_predictions <- df_attempt_recalc %>%
+  filter(attempt_num %in% 1:3) %>%
+  group_by(age, attempt_num) %>%
+  summarise(
+    afc = mean(afc, na.rm = TRUE),
+    amh = mean(amh, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    amh_bin = case_when(
+      amh < 0.5 ~ "Very low",
+      amh >= 0.5 & amh < 1.0 ~ "Low",
+      amh >= 1.0 & amh <= 3.0 ~ "Normal",
+      amh > 3.0 ~ "High",
+      TRUE ~ NA_character_
+    ),
+    amh_bin = factor(amh_bin, levels = c("Very low", "Low", "Normal", "High"))
+  )
 
-# Bin groups below 30 and over 44 (due to low sample size)
+attempt_predictions$predicted_p <- predict(
+  attempt_model,
+  newdata = attempt_predictions,
+  type = "response"
+)
+
+
+
 attempt_predictions_kable <- attempt_predictions %>%
   mutate(
-    age_table = case_when(
+    age_display = case_when(
       age <= 30 ~ "<=30",
       age >= 44 ~ ">=44",
       TRUE ~ as.character(age)
     )
   ) %>%
-  group_by(age_table, attempt_num) %>%
+  group_by(age_display, attempt_num) %>%
   summarise(
-    predicted_p_mean = mean(predicted_p_mean, na.rm = TRUE),
+    afc = mean(afc, na.rm = TRUE),
+    amh = mean(amh, na.rm = TRUE),
+    predicted_p = mean(predicted_p, na.rm = TRUE),
     .groups = "drop"
   ) %>%
   mutate(
-    age_table = factor(age_table, levels = c("<=30", as.character(31:43), ">=44"))
+    amh_bin = case_when(
+      amh < 0.5 ~ "Very low",
+      amh >= 0.5 & amh < 1.0 ~ "Low",
+      amh >= 1.0 & amh <= 3.0 ~ "Normal",
+      amh > 3.0 ~ "High",
+      TRUE ~ NA_character_
+    ),
+    amh_bin = factor(amh_bin, levels = c("Very low", "Low", "Normal", "High")),
+    age_display = factor(age_display, levels = c("<=30", as.character(31:43), ">=44"))
   ) %>%
-  arrange(age_table, attempt_num)
+  arrange(age_display, attempt_num)
 
 kable(attempt_predictions_kable, digits = 3)
 
 # Plot cycle-level probabilities per age
-ggplot(attempt_predictions, aes(x = age, y = predicted_p_mean, color = factor(attempt_num))) +
-  geom_line(linewidth = 1) +
+ggplot(attempt_predictions, aes(x = age, y = predicted_p, color = factor(attempt_num))) +
+  geom_smooth(linewidth = 1, se = FALSE) +
   geom_point(size = 2, alpha = 0.7) +
   scale_color_manual(
     values = c("1" = "purple", "2" = "navy", "3" = "darkgreen"),
@@ -531,9 +548,10 @@ attempt_predictions %>%
   write_csv("outputs/attempt_probabilities_by_age_long.csv")
 
 attempt_predictions_wide <- attempt_predictions_kable %>%
+  select(c("age_display", "attempt_num", "predicted_p")) %>%
   pivot_wider(
     names_from = attempt_num,
-    values_from = predicted_p_mean,
+    values_from = predicted_p,
     names_prefix = "cycle_"
   )
 
@@ -548,10 +566,10 @@ attempt_predictions_wide %>%
 # Use p1, p2, p3 instead of assuming constant probability
 
 multi_cycle_dynamic <- attempt_predictions_kable %>%
-  group_by(age_table) %>%
+  group_by(age_display) %>%
   summarize(
-    success_prob = 1 - prod(1 - predicted_p_mean),
-    failure_prob = prod(1 - predicted_p_mean)
+    success_prob = 1 - prod(1 - predicted_p),
+    failure_prob = prod(1 - predicted_p)
 )
 
 multi_cycle_dynamic |> 
