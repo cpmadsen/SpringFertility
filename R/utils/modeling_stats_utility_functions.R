@@ -131,6 +131,82 @@ run_simulation <- function(p_vec, cost, payout, n_sim) {
   })
 }
 
+check_dispersion <- function(model) {
+  residual_dev <- deviance(model)
+  df_resid <- df.residual(model)
+  dispersion <- residual_dev / df_resid
+  return(dispersion)
+}
+
+brier_score <- function(actual, predicted) {
+  mean((predicted - actual)^2)
+}
+
+calibration_table <- function(actual, predicted) {
+  data.frame(actual, predicted) %>%
+    mutate(bin = ntile(predicted, 10)) %>%
+    group_by(bin) %>%
+    summarize(
+      pred_mean = mean(predicted),
+      actual_mean = mean(actual),
+      abs_error = abs(pred_mean - actual_mean),
+      n = n(), # sample size per bin (important for stability)
+      .groups = "drop"
+    )
+}
+
+# Single Cycle Egg (Tiered)
+payout_egg_single <- function(eggs) {
+  ifelse(eggs <= 2, 0.5,
+         ifelse(eggs <= 4, 0.25,
+                0))
+}
+
+# Multi-Cycle Egg
+payout_egg_multi <- function(total_eggs) {
+  ifelse(total_eggs < 10, 0.5,
+         ifelse(total_eggs < 15, 0.25,
+                0))
+}
+
+# Euploid Embryo
+payout_euploid <- function(has_euploid) {
+  ifelse(has_euploid == 0, 1.0, 0)
+}
+
+# Live Birth
+payout_livebirth <- function(live_birth) {
+  ifelse(live_birth == 0, 1.0, 0)
+}
+
+simulate_eggs <- function(newdata, n = 2000) {
+  mu <- predict(egg_model, newdata, type = "response")
+  theta <- 5
+  rnbinom(n, mu = mu, size = theta)
+}
+
+get_thresholds_1cycle <- function(newdata) {
+  sims <- simulate_eggs(newdata)
+  c(
+    threshold_90 = quantile(sims, 0.10),
+    threshold_95 = quantile(sims, 0.05)
+  )
+}
+
+simulate_eggs2 <- function(newdata, n = 2000) {
+  mu <- predict(egg2_model, newdata, type = "response")
+  theta <- 5
+  rnbinom(n, mu = mu, size = theta)
+}
+
+get_thresholds_2cycle <- function(newdata) {
+  sims <- simulate_eggs2(newdata)
+  c(
+    threshold_90 = quantile(sims, 0.10),
+    threshold_95 = quantile(sims, 0.05)
+  )
+}
+
 # ############################################################
 # # FUNCTION: FINAL PRICING
 # ############################################################

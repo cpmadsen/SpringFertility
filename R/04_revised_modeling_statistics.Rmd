@@ -14,6 +14,7 @@ library(dplyr)
 library(ggplot2)
 library(VGAM)
 library(pROC)
+library(MASS)
 library(ResourceSelection)
 library(knitr)
 library(tidyr)
@@ -31,60 +32,8 @@ df <- readr::read_rds("data/clean_data/cld_filtered.rds") |>
 
 egg_df = readr::read_rds("data/clean_data/cleaned_egg_level_df.rds")
 
-df <- df %>%
-  mutate(age_group = case_when(
-    age < 35 ~ "<35",
-    age >= 35 & age <= 37 ~ "35-37",
-    age >= 38 & age <= 40 ~ "38-40",
-    age >= 41 ~ "41+"
-  )) %>%
-  mutate(amh_bin = case_when(
-    amh < 0.5 ~ "Very low",
-    amh >= 0.5 & amh < 1.0 ~ "Low",
-    amh >= 1.0 & amh <= 3.0 ~ "Normal",
-    amh > 3.0 ~ "High"
-  ))
-
-df$age_group <- as.factor(df$age_group)
-df$amh_bin <- as.factor(df$amh_bin)
-
 # Number of unique PAT ids
 df = df |> dplyr::mutate(the_year = lubridate::year(treatment_start_date))
-```
-
-```{r define_payment_functions}
-# Single Cycle Egg (Tiered)
-payout_egg_single <- function(eggs) {
-  ifelse(eggs <= 2, 0.5,
-        ifelse(eggs <= 4, 0.25,
-                0))
-}
-
-# Multi-Cycle Egg
-payout_egg_multi <- function(total_eggs) {
-  ifelse(total_eggs < 10, 0.5,
-        ifelse(total_eggs < 15, 0.25,
-        0))
-}
-
-# Euploid Embryo
-payout_euploid <- function(has_euploid) {
-  ifelse(has_euploid == 0, 1.0, 0)
-}
-
-# Live Birth
-payout_livebirth <- function(live_birth) {
-  ifelse(live_birth == 0, 1.0, 0)
-}
-
-# # Make patient grid.
-# ages <- seq(30, 42, by = 2)
-# amh_values <- c(0.3, 0.8, 2.0, 4.0)
-# 
-# patient_grid <- expand.grid(
-#   age = ages,
-#   amh = amh_values
-# )
 ```
 
 # Descriptive Statistics {.tabset}
@@ -93,9 +42,9 @@ payout_livebirth <- function(live_birth) {
 
 ```{r}
 df |> 
-  dplyr::select(pat_id, age_group) |> 
+  dplyr::select(pat_id, age) |> 
   dplyr::distinct() |> 
-  dplyr::count(age_group) |> 
+  dplyr::count(age) |> 
   knitr::kable()
 ```
 
@@ -124,7 +73,7 @@ df |>
 ## Descriptive Pregnancy Rates
 ```{r}
 pregnancy_rates <- df %>%
-  group_by(age_group) %>%
+  group_by(age) %>%
   summarize(
     cycles = n(),
     pregnancies = sum(pregnant),
@@ -133,7 +82,7 @@ pregnancy_rates <- df %>%
 
 kable(pregnancy_rates, digits = 3)
 
-ggplot(pregnancy_rates, aes(x = age_group, y = pregnancy_rate)) +
+ggplot(pregnancy_rates, aes(x = age, y = pregnancy_rate)) +
   geom_col() +
   labs(
     title = "Pregnancy Rate by Age Group",
@@ -165,7 +114,7 @@ var_summary <- df %>%
   mutate(
     total_2pn_eggs = num_2pn_from_fresh_eggs + num_2pn_from_frozen_eggs
   ) %>%
-  group_by(age_group) %>%
+  group_by(age) %>%
   summarise(
     n_cycles = n(),
     
@@ -219,451 +168,98 @@ var_summary_fmt |>
   knitr::kable()
 ```
 
+# Removal of Patients over 43 years of age
+
+```{r}
+df = df |> 
+  dplyr::filter(age <= 43)
+
+egg_df = egg_df |> 
+  dplyr::filter(age <= 43)
+```
+
 # Patient-level Statistical Models {.tabset}
 
 Two models here:
+
 Live birth model
 Euploid embryo model
 
-```{r}
+
+```{r make_model_1_dataset}
+
+# <!-- This filter reduces the number of rows of data in this cycle-level table from `r nrow(df)` to `r nrow(m1df)`. -->
+  
 # Note - models in this section include only treatments of type 'ICSI' (the majority of the treatments) and NOT those of type 'IVF'.
 
 euploid_embryos_from_egg_df = egg_df |> 
   dplyr::select(pat_id,tx_id,tx_cycle,pgd_clinresult) |> 
   dplyr::group_by(pat_id,tx_id) |> 
-  dplyr::reframe(euploid_embryo = sum(pgd_clinresult %in% c("Euploid", "Normal") & !is.na(pgd_clinresult)) > 0)
+  dplyr::reframe(euploid_success = sum(pgd_clinresult %in% c("Euploid", "Normal") & !is.na(pgd_clinresult)) > 0)
 
 m1df = df |>
   dplyr::left_join(euploid_embryos_from_egg_df) |> 
-  dplyr::filter(euploid_embryo)
+  dplyr::select(euploid_success, age, afc, amh, birth_bool) |> 
+  tidyr::drop_na()
+
   # dplyr::filter(treatment == 'ICSI')
 ```
 
-This filter reduces the number of rows of data in this cycle-level table from `r nrow(df)` to `r nrow(m1df)`.
 
-## Live-birth Binomial Model {.tabset}
 
-### Maybe Extraneous {.tabset}
+## Live-birth Model {.tabset}
 
-The model is this:
+### Model Outputs
 
-$live-birth \sim age + afc + amh$
+```{r run_first_two_models}
 
-Where 'live-birth' is a true or false value and age, afc, and amh are numeric predictor variables.
-
-For treatment cycles with one or more euploid embryos.
-
-```{r}
-# Clean data
-m1df <- m1df %>%
-  filter(
-    !is.na(birth_bool),
-    !is.na(age),
-    !is.na(amh),
-    !is.na(afc)
-  )
-
-# Model
-logit_model <- glm(
-  birth_bool ~ age + amh + afc,
+# <!-- After dropping rows with NA for any of `euploid_success`, `age`, `afc`, or `amh`, the treatment cycle-level dataset has `r nrow(m1df)` observations, `r nrow(m1df_eup)` of which achieved a euploid embryo success. -->
+  
+euploid_model <- glm(
+  euploid_success ~ age + amh + afc,
   family = binomial,
   data = m1df
 )
 
-validate_model(logit_model, data = m1df, outcome = "birth_bool")
-
-# Summary table
-logit_summary <- summary(logit_model)$coefficients
-
-knitr::kable(logit_summary, digits = 3)
-```
-
-#### Predicted Probabilities
-
-```{r}
-predicted_probs <- m1df %>%
-  distinct(age, amh, afc) %>%
-  mutate(predicted_p = predict(logit_model, newdata = ., type = "response")) |> 
-  dplyr::arrange(age)
-
-# # Regroup predicted probabilities
-# predicted_probs |> 
-#   summarise_to_age_classes('predicted_p') |> 
-#   knitr::kable()
-
-predicted_probs |> 
-  dplyr::group_by(age) |> 
-  dplyr::reframe(mean_predicted_p = mean(predicted_p)) |> 
-  # summarise_to_age_classes('predicted_p') |> 
-  ggplot(aes(x = age)) +
-  geom_point(size = 3, aes(y = mean_predicted_p)) +
-  geom_line(aes(group = 1, y = mean_predicted_p)) +
-  labs(
-    title = "Mean Predicted Probability of Pregnancy by Age",
-    x = "Age",
-    y = "Predicted Probability"
-  ) + 
-  theme_minimal()
-```
-
-#### Compare Results with Branch's Calculator
-
-Here are the inputs we used for Branch Calculator:
-
-![](images/branch_calculator_example_results.JPG)
-
-Here are the predicted probabilities based on our cycle-level dataset, using this model
-
-$pregant \sim agegroup + amh + afc+ bmi$
-
-```{r}
-
-# one_cycle_probs = predicted_probs_frozen |> 
-#   dplyr::group_by(age_group) |> 
-#   dplyr::reframe(median_predicted_prob = median(predicted_p,na.rm=T))
-
-N <- 1
-
-one_cycle_probs <- predicted_probs %>%
-  mutate(
-    success_N_cycles = 1 - (1 - predicted_p)^N,
-    failure_N_cycles = (1 - predicted_p)^N
-  )
-
-N <- 2
-
-two_cycle_probs <- predicted_probs %>%
-  mutate(
-    success_N_cycles = 1 - (1 - predicted_p)^N,
-    failure_N_cycles = (1 - predicted_p)^N
-  )
-
-one_cycle_tbl = one_cycle_probs |> 
-  dplyr::group_by(age) |> 
-  dplyr::reframe(median_predicted_prob = mean(success_N_cycles,na.rm=T)) |> 
-  dplyr::mutate(cycle_attempts = 1)
-  
-two_cycle_tbl = two_cycle_probs |> 
-  dplyr::group_by(age) |> 
-  dplyr::reframe(median_predicted_prob = mean(success_N_cycles,na.rm=T)) |> 
-  dplyr::mutate(cycle_attempts = 2)
-
-one_cycle_tbl |> 
-  summarise_to_age_classes("median_predicted_prob") |> 
-  dplyr::mutate(cycle_attempts = 1) |> 
-  dplyr::bind_rows(
-    two_cycle_tbl |> 
-      summarise_to_age_classes("median_predicted_prob") |> 
-      dplyr::mutate(cycle_attempts = 2)
-) |> 
-  knitr::kable()
-```
-
-#### Multi-Cycle Success (Insurance View)
-
-```{r}
-# One cycle 
-N <- 3
-
-multi_cycle <- predicted_probs %>%
-  mutate(
-    success_N_cycles = 1 - (1 - predicted_p)^N,
-    failure_N_cycles = (1 - predicted_p)^N
-  )
-
-multi_cycle |> 
-  summarise_to_age_classes('predicted_p') |>
-  kable(digits = 3)
-
-multi_cycle |> 
-  summarise_to_age_classes('success_N_cycles') |> 
-  ggplot(aes(x = age_group, y = success_N_cycles_mean)) +
-  geom_col() +
-  labs(
-    title = paste("Probability of Success Within", N, "Cycles"),
-    x = "Age Group",
-    y = "Success Probability"
-  )
-```
-
-#### Attempt-Level Modeling
-
-```{r}
-df_attempt_recalc <- m1df %>%
-  group_by(pat_id) %>%
-  arrange(treatment_start_date, .by_group = TRUE) %>%
-  mutate(attempt_num = row_number()) %>%
-  ungroup()
-
-attempt_model <- glm(
-  birth_bool ~ age + afc + amh + attempt_num,
-  family = binomial,
-  data = df_attempt_recalc
+live_birth_model <- glm(
+  birth_bool ~ age + amh + afc,
+  family = quasibinomial,
+  data = m1df |> dplyr::filter(euploid_success)
 )
 
-attempt_summary <- summary(attempt_model)$coefficients
-kable(attempt_summary, digits = 3)
-```
+m1df$pred_euploid <- predict(euploid_model, new_data = m1df, type = "response")
 
-#### Predicted Probability by Attempt
+m1df_eup = m1df |> 
+  dplyr::filter(euploid_success)
 
-```{r}
-age_seq <- seq(
-  floor(min(df_attempt_recalc$age, na.rm = TRUE)),
-  ceiling(max(df_attempt_recalc$age, na.rm = TRUE)),
-  by = 1
-)
-
-cycle_seq <- sort(unique(df_attempt_recalc$attempt_num))
-cycle_seq <- cycle_seq[cycle_seq <= 3]
-
-# Calculate predicted probabilities given AFC/AMH per unique combination of age/cycle to maintain in-group distribution
-attempt_predictions <- df_attempt_recalc %>%
-  filter(attempt_num %in% 1:3) %>%
-  group_by(age, attempt_num) %>%
-  summarise(
-    afc = mean(afc, na.rm = TRUE),
-    amh = mean(amh, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  mutate(
-    amh_bin = case_when(
-      amh < 0.5 ~ "Very low",
-      amh >= 0.5 & amh < 1.0 ~ "Low",
-      amh >= 1.0 & amh <= 3.0 ~ "Normal",
-      amh > 3.0 ~ "High",
-      TRUE ~ NA_character_
-    ),
-    amh_bin = factor(amh_bin, levels = c("Very low", "Low", "Normal", "High"))
-  )
-
-attempt_predictions$predicted_p <- predict(
-  attempt_model,
-  newdata = attempt_predictions,
+m1df_eup$pred_lb_given_euploid <- predict(
+  live_birth_model,
+  newdata = m1df_eup,
   type = "response"
 )
 
+m1df_eup$pred_live_birth <- m1df_eup$pred_euploid * m1df_eup$pred_lb_given_euploid
 
-
-attempt_predictions_kable <- attempt_predictions %>%
-  mutate(
-    age_display = case_when(
-      age <= 30 ~ "<=30",
-      age >= 44 ~ ">=44",
-      TRUE ~ as.character(age)
-    )
-  ) %>%
-  group_by(age_display, attempt_num) %>%
-  summarise(
-    afc = mean(afc, na.rm = TRUE),
-    amh = mean(amh, na.rm = TRUE),
-    predicted_p = mean(predicted_p, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  mutate(
-    amh_bin = case_when(
-      amh < 0.5 ~ "Very low",
-      amh >= 0.5 & amh < 1.0 ~ "Low",
-      amh >= 1.0 & amh <= 3.0 ~ "Normal",
-      amh > 3.0 ~ "High",
-      TRUE ~ NA_character_
-    ),
-    amh_bin = factor(amh_bin, levels = c("Very low", "Low", "Normal", "High")),
-    age_display = factor(age_display, levels = c("<=30", as.character(31:43), ">=44"))
-  ) %>%
-  arrange(age_display, attempt_num)
-
-kable(attempt_predictions_kable, digits = 3)
-
-# Plot cycle-level probabilities per age
-ggplot(attempt_predictions, aes(x = age, y = predicted_p, color = factor(attempt_num))) +
-  geom_smooth(linewidth = 1, se = FALSE) +
-  geom_point(size = 2, alpha = 0.7) +
-  scale_color_manual(
-    values = c("1" = "purple", "2" = "navy", "3" = "darkgreen"),
-    name = "Cycle"
-  ) +
-  scale_x_continuous(
-    limits = c(22, 48),
-    breaks = seq(22, 48, by = 2),
-    minor_breaks = seq(22, 48, by = 1)
-  ) +
-  scale_y_continuous(
-    limits = c(0, 1),
-    breaks = seq(0, 1, by = 0.1),
-    minor_breaks = seq(0, 1, by = 0.05),
-    labels = scales::percent_format(accuracy = 1)
-  ) +
-  labs(
-    title = "Predicted Probability of Pregnancy by Age and Cycle",
-    subtitle = "Model-adjusted probabilities averaged over AFC and AMH distribution",
-    x = "Age",
-    y = "Probability of Pregnancy"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title = element_text(face = "bold", size = 16),
-    plot.subtitle = element_text(size = 12, color = "gray40"),
-    axis.title = element_text(face = "bold"),
-    legend.position = "top",
-    legend.title = element_text(face = "bold"),
-    panel.grid.minor = element_line(color = "gray90", linewidth = 0.3)
-  )
-
-attempt_predictions %>%
-  write_csv("outputs/attempt_probabilities_by_age_long.csv")
-
-attempt_predictions_wide <- attempt_predictions_kable %>%
-  select(c("age_display", "attempt_num", "predicted_p")) %>%
-  pivot_wider(
-    names_from = attempt_num,
-    values_from = predicted_p,
-    names_prefix = "cycle_"
-  )
-
-attempt_predictions_wide %>%
-  write_csv("outputs/attempt_probabilities_by_age_wide.csv")
-
-```
-
-#### Multi-cycle with Varying Probabilities
-
-```{r}
-# Use p1, p2, p3 instead of assuming constant probability
-
-multi_cycle_dynamic <- attempt_predictions_kable %>%
-  group_by(age_display) %>%
-  summarize(
-    success_prob = 1 - prod(1 - predicted_p),
-    failure_prob = prod(1 - predicted_p)
-)
-
-multi_cycle_dynamic |> 
-  knitr::kable()
-```
-
-### Binomial Model (Actuarial model)
-
-```{r}
-
-# First aggregate to patient level
-patient_summary <- m1df %>%
-  group_by(pat_id, age, amh, afc) %>%
-  summarize(
-    attempts = n(),
-    successes = as.integer(sum(birth_bool)),
-    .groups = "drop"
-)
-
-print(paste0("Dropping rows from patient_summary table that have NA in any predictor variable; row count drops from ",nrow(patient_summary), " to ",nrow(drop_na(patient_summary))))
-
-patient_summary = patient_summary |> 
-  drop_na()
-
-# table(patient_summary$age) |> knitr::kable()
-
-livebirth_mod = run_binomial_model_with_various_distributions(patient_summary, formula = "cbind(successes, attempts - successes) ~ age + amh + afc") |> 
-  suppressMessages()
-
-print("Here is the full model validation output:")
-
-validate_model(livebirth_mod, data = patient_summary, outcome_var = 'successes')
-
-summary(livebirth_mod)
-
-# Save model to disk
-livebirth_mod |> readr::write_rds("data/models/live_birth_model.rds")
-
-# Convert to dataframe.
-mod1_binom_model_summary = coef(summary(livebirth_mod)) |> 
-  as.data.frame()
-
-```
-
-```{r}
-patient_summary <- patient_summary |>
-  dplyr::mutate(
-    pred_p = predict(livebirth_mod, newdata = patient_summary, type = "response"),
-    prob_achieve_pregnancy = 1 - (1 - pred_p)
-  )
-
-# Simulate outcomes per patient
-set.seed(123)
-
-live_birth_sim_results <- patient_summary |>
+livebirth_sim_results <- m1df_eup |>
   dplyr::rowwise() |>
   dplyr::mutate(
-    success_sim = rbinom(1, size = 1, prob = pred_p),
-    achieve_livebirth_sim = success_sim >= 1
+    success_sim = rbinom(1, size = 1, prob = pred_live_birth),
+    livebirth_success_simulated = success_sim >= 1
   ) |>
   dplyr::ungroup()
+```
 
-print("The following table represents predicted successes or failures at the unique pat_id level based on the live-birth binomial model.")
+<!-- The live-birth model's measure of dispersion is `r check_dispersion(live_birth_model)`. -->
 
-live_birth_sim_results |> 
+```{r}
+livebirth_sim_results |>
   DT::datatable()
-```
 
-#### Plot of simulated payout
-```{r}
-payout_amount <- 22000
-
-p1_df <- live_birth_sim_results %>%
-  mutate(
-    pred_fail_p = 1 - pred_p,
-    pred_payout = pred_fail_p * payout_amount
-  ) %>%
-  group_by(age) %>%
-  summarise(
-    mean_pred_payout = mean(pred_payout, na.rm = TRUE),
-    sd_pred_payout = sd(pred_payout, na.rm = TRUE),
-    number_patients = n(),
-    .groups = "drop"
-  )
-
-p1_df %>%
-  ggplot(aes(x = age, y = mean_pred_payout)) +
-  geom_smooth(linewidth = 1, color = "#2C7FB8") +
-  geom_point(size = 2.5, color = "#2C7FB8", alpha = 0.8) +
-  labs(
-    title = "Expected Insurance Payout by Age",
-    subtitle = "Live-birth Model",
-    x = "Age (years)",
-    y = "Average Predicted Payout ($)"
-  ) +
-  scale_y_continuous(labels = scales::dollar_format()) +
-  scale_x_continuous(limits = c(30, 42), breaks = 30:42) +
-  theme_minimal(base_size = 13) +
-  theme(
-    plot.title = element_text(face = "bold", size = 16),
-    plot.subtitle = element_text(size = 12, color = "gray40"),
-    axis.title = element_text(face = "bold"),
-    axis.text = element_text(color = "gray20"),
-    panel.grid.minor = element_blank()
-  )
-```
-
-### Simulated Probabilities averaged by Age
-```{r}
-live_birth_sim_results |> 
-  dplyr::group_by(age) |> 
-  dplyr::reframe(
-    pct_achieve_livebirth_sim = mean(achieve_livebirth_sim, na.rm = TRUE)
-  ) |> 
-  dplyr::arrange(age) |> 
+livebirth_sim_results |> 
+  dplyr::count(livebirth_success_simulated) |> 
+  dplyr::mutate(percentage = round( 100 * n / sum(n), 2)) |> 
   knitr::kable()
 ```
-
-
-The following statistics are based on these values:
-
--   cost per cycle: \$22,014
-
--   payout amount: \$17,611
-
--   risk margin: 0.2
-
--   admin load: 0.1
 
 ```{r read_in_egg_dataframe_and_clean_it, include = F}
 
@@ -674,16 +270,6 @@ The following statistics are based on these values:
 egg_df = egg_df |> 
   dplyr::select(pat_id, egg_id, age, attempt, pgd_clinresult, frozen_embryo, frozen_egg, afc_other, afc_first_baseline, amh, amh_start) |> 
   dplyr::filter(!is.na(age))
-
-# Calculate age_group
-egg_df = egg_df |> 
-  dplyr::mutate(age_group = case_when(
-    age < 35 ~ "<35",
-    age >= 35 & age <= 37 ~ "35-37",
-    age >= 38 & age <= 40 ~ "38-40",
-    age >= 41 ~ "41+"
-  )
-)
 
 # Add treatment course ID and cycle number ID columns
 df = df |> 
@@ -712,59 +298,39 @@ n_sim <- 5000 # Monte Carlo iterations
 
 ```
 
+### Simulated Probabilities averaged by Age
+```{r}
+livebirth_sim_results |> 
+  dplyr::group_by(age) |> 
+  dplyr::reframe(
+    pct_livebirth_simulated = mean(livebirth_success_simulated, na.rm = TRUE)
+  ) |> 
+  dplyr::arrange(age) |> 
+  knitr::kable()
+```
+
 ## Euploid Embryo Model (Binomial) {.tabset}
 
 ### Model Outputs
 
+<!-- The euploid model's measure of dispersion is `r check_dispersion(euploid_model)`. -->
+
 ```{r}
-############################################################
-# 1. EUPLOID EMBRYO MODEL (BINOMIAL)
-############################################################
-
-# We'll need to join AFC and AMH from cycle-level table to egg table.
-
-m2df = df |>
-  dplyr::left_join(euploid_embryos_from_egg_df) |> 
-  dplyr::select(pat_id,age,afc,amh,euploid_embryo) |> 
-  tidyr::drop_na() |> 
-  dplyr::rename(one_plus_euploid = euploid_embryo)
-
-# Fit binomial model for per-egg euploid probability as a function of age
-euploid_binom_model <- glm(
-  one_plus_euploid ~ age + afc + amh,
-  family = binomial,
-  data = m2df
-)
-
-validate_model(euploid_binom_model, m2df, 'one_plus_euploid')
-
-# Save model to disk
-euploid_binom_model |> readr::write_rds("data/models/euploid_model.rds")
-
-# Save coefficient summary
-euploid_model_summary <- coef(summary(euploid_binom_model)) |>
-  as.data.frame()
-
-# Add predicted probabilities
-m2df <- m2df |>
-  dplyr::mutate(
-    pred_p = predict(euploid_binom_model, newdata = m2df, type = "response"),
-    prob_ge1_euploid = 1 - (1 - pred_p)^(1)
-  )
-
-# Simulate outcomes per patient
-set.seed(123)
-
-euploid_sim_results <- m2df |>
+euploid_sim_results <- m1df |>
   dplyr::rowwise() |>
   dplyr::mutate(
-    success_sim = rbinom(1, size = 1, prob = pred_p),
+    success_sim = rbinom(1, size = 1, prob = pred_euploid),
     ge1_euploid_sim = success_sim >= 1
   ) |>
   dplyr::ungroup()
 
 euploid_sim_results |>
   DT::datatable()
+
+euploid_sim_results |> 
+  dplyr::count(ge1_euploid_sim) |> 
+  dplyr::mutate(percentage = round( 100 * n / sum(n), 2)) |> 
+  knitr::kable()
 ```
 
 ### Simulated Probabilities averaged by Age
@@ -778,43 +344,43 @@ euploid_sim_results |>
   knitr::kable()
 ```
 
-### Plot of simulated payout
 ```{r}
-payout_amount <- 22000
-
-eup_df <- euploid_sim_results %>%
-  mutate(
-    pred_fail_p = 1 - prob_ge1_euploid,
-    pred_payout = pred_fail_p * payout_amount
-  ) %>%
-  group_by(age) %>%
-  summarise(
-    mean_pred_payout = mean(pred_payout, na.rm = TRUE),
-    sd_pred_payout = sd(pred_payout, na.rm = TRUE),
-    number_patients = n(),
-    .groups = "drop"
-  )
-
-eup_df %>%
-  ggplot(aes(x = age, y = mean_pred_payout)) +
-  geom_smooth(linewidth = 1, color = "#2C7FB8") +
-  geom_point(size = 2.5, color = "#2C7FB8", alpha = 0.8) +
-  labs(
-    title = "Expected Insurance Payout by Age",
-    subtitle = "Euploid Embryo Model",
-    x = "Age (years)",
-    y = "Average Predicted Payout ($)"
-  ) +
-  scale_y_continuous(labels = scales::dollar_format()) +
-  scale_x_continuous(limits = c(30, 42), breaks = 30:42) +
-  theme_minimal(base_size = 13) +
-  theme(
-    plot.title = element_text(face = "bold", size = 16),
-    plot.subtitle = element_text(size = 12, color = "gray40"),
-    axis.title = element_text(face = "bold"),
-    axis.text = element_text(color = "gray20"),
-    panel.grid.minor = element_blank()
-  )
+# ### Plot of simulated payout
+# payout_amount <- 22000
+# 
+# eup_df <- euploid_sim_results %>%
+#   mutate(
+#     pred_fail_p = 1 - pred_euploid,
+#     pred_payout = pred_fail_p * payout_amount
+#   ) %>%
+#   group_by(age) %>%
+#   summarise(
+#     mean_pred_payout = mean(pred_payout, na.rm = TRUE),
+#     sd_pred_payout = sd(pred_payout, na.rm = TRUE),
+#     number_patients = n(),
+#     .groups = "drop"
+#   )
+# 
+# eup_df %>%
+#   ggplot(aes(x = age, y = mean_pred_payout)) +
+#   geom_smooth(linewidth = 1, color = "#2C7FB8") +
+#   geom_point(size = 2.5, color = "#2C7FB8", alpha = 0.8) +
+#   labs(
+#     title = "Expected Insurance Payout by Age",
+#     subtitle = "Euploid Embryo Model",
+#     x = "Age (years)",
+#     y = "Average Predicted Payout ($)"
+#   ) +
+#   scale_y_continuous(labels = scales::dollar_format()) +
+#   scale_x_continuous(limits = c(30, 42), breaks = 30:42) +
+#   theme_minimal(base_size = 13) +
+#   theme(
+#     plot.title = element_text(face = "bold", size = 16),
+#     plot.subtitle = element_text(size = 12, color = "gray40"),
+#     axis.title = element_text(face = "bold"),
+#     axis.text = element_text(color = "gray20"),
+#     panel.grid.minor = element_blank()
+#   )
 ```
 
 # Egg Actuarial Models (Beta-binomial / Binomial + Monte-Carlo Simulation) {.tabset}
@@ -831,99 +397,147 @@ df = df |> dplyr::filter(!is.na(amh))
 Note: this model uses the patient / cycle-level table and does not currently filter away rows for eggs of cryo_day_2 or cryo_day_3; N of this dataframe is therefore `r nrow(df)`.
 
 ```{r}
-threshold_single <- 7
 
-single_cycle_egg_df <- df %>%
-  filter(
-    !is.na(age),
-    !is.na(afc),
-    !is.na(amh),
-    !is.na(num_eggs_collected),
-    !is.na(treatment_start_date)
-  ) %>%
-  arrange(pat_id, treatment_start_date) %>%
-  group_by(pat_id) %>%
-  slice(1) %>%
-  ungroup() %>%
-  mutate(
-    success = as.numeric(num_eggs_collected >= threshold_single),
-    
-    # AMH bins
-    # amh_bin = case_when(
-    #   amh < 0.5 ~ "Very low",
-    #   amh >= 0.5 & amh < 1.0 ~ "Low",
-    #   amh >= 1.0 & amh <= 3.0 ~ "Normal",
-    #   amh > 3.0 ~ "High"
-    # ),
-    # 
-    # amh_bin = factor(amh_bin, levels = c("Very low", "Low", "Normal", "High"))
-  )
+df_no_na = df |> dplyr::select(pat_id, tx_id, num_eggs_collected, age, amh, afc) |> tidyr::drop_na()
 
-# Model
-s_egg_model <- glm(
-  success ~ age + afc + amh,
-  family = binomial,
-  data = single_cycle_egg_df
+# First, construct a Poisson-distribution of the number of eggs collected based on the data we have
+egg_model <- glm(
+  num_eggs_collected ~ age + amh + afc,
+  family = quasipoisson(link = "log"),
+  data = df_no_na
 )
 
-validate_model(s_egg_model, single_cycle_egg_df, "success")
+df_no_na$pred_eggmodel_1 = predict(egg_model, new_data = df_no_na, type = "response")
 
-# Save model to disk
-s_egg_model |> readr::write_rds("data/models/single_egg_model.rds")
+# Next, for each patient, based on their characteristics (age, afc, amh), simulate 
+# 2000 hypothetical egg gathering treatments; these make up the simulated
+# expectable distribution that is unique to that patient. We then take 
+# out the 90th and 95th percentile of expectable eggs and use that as a 
+# threshold for whether or not a simulated session would be successful
+# for this patient. It's all about likelihoods!
+egg_1cycle_simulated_thresholds_by_patient = df_no_na |> 
+  dplyr::group_by(pat_id) |> 
+  dplyr::group_split() |> 
+  purrr::map( ~ {
+    sim_egg_1cycle_distribution = simulate_eggs(.x)
+    sim_egg_1cycle_90 = quantile(sim_egg_1cycle_distribution, 0.1)
+    sim_egg_1cycle_95 = quantile(sim_egg_1cycle_distribution, 0.05)
+    output = data.frame(
+      pat_id = .x$pat_id,
+      sim_egg_1cycle_90,
+      sim_egg_1cycle_95
+    )
+    row.names(output) = NULL
+    output |> tidyr::as_tibble()
+  },.progress) |> 
+  dplyr::bind_rows() |> 
+  dplyr::distinct() |> 
+  suppressWarnings()
 
-s_egg_model_summary <- coef(summary(s_egg_model)) %>%
-  as.data.frame()
+df_with_thresholds <- df_no_na |>
+  dplyr::left_join(egg_1cycle_simulated_thresholds_by_patient, by = "pat_id")
 
-coef_s_egg <- coef(s_egg_model)
+# Now we simulate a single 'draw' for each patient, compare that draw to the 
+# patient-specific distribution of expectable number of eggs, and classify
+# the draw as either a success or a failure (i.e. above or below the threshold, respectively)
+eggmodel_sim_results <- df_with_thresholds |>
+  dplyr::rowwise() %>%
+  dplyr::mutate(
+    sim_eggs_one_cycle = simulate_eggs(., n = 1),
+    success_90 = sim_eggs_one_cycle >= sim_egg_1cycle_90,
+    success_95 = sim_eggs_one_cycle >= sim_egg_1cycle_95
+  ) |>
+  dplyr::ungroup()
 
-# Add predicted probabilities
-single_cycle_egg_df <- single_cycle_egg_df %>%
-  mutate(
-    pred_p = predict(s_egg_model, newdata = single_cycle_egg_df, type = "response")
-  )
+eggmodel_sim_results |> 
+  dplyr::count(success_90, success_95) |> 
+  dplyr::mutate(percentage = round(100*n/sum(n),4))
 
-# Simulate outcomes
-set.seed(123)
-
-s_egg_sim_results <- single_cycle_egg_df %>%
-  mutate(
-    success_sim = rbinom(n(), size = 1, prob = pred_p)
-  )
-
-s_egg_sim_results %>%
-  DT::datatable()
-```
-
-### Plot Predicted payouts
-```{r}
-p3_df = single_cycle_egg_df |> 
-  dplyr::mutate(pred_fail_p = 1 - pred_p) |> 
-  dplyr::mutate(pred_payout = pred_fail_p * 20000) |>  # Arbitrary amount of payout!
-  dplyr::group_by(age, amh) |> 
-  dplyr::reframe(mean_pred_payout = mean(pred_payout, na.rm=T))
-
-p3_df |> 
-  ggplot(aes(x = age, y = mean_pred_payout)) +
-  geom_line(aes(col = amh)) +
-  # geom_smooth(aes(group = amh_bin, colour = amh_bin), method = 'lm') +
-  geom_point(aes(colour = amh)) + 
-  # facet_wrap( ~ amh_bin, ncol = 1) +
-  labs(y = "Total Simulated Payout by Age", colour = 'AMH bin', x = "Age") +
-  scale_y_continuous(labels = scales::dollar) +
-  scale_x_continuous(limits = c(30,42)) + 
-  theme_minimal()
 ```
 
 ### Simulated Probabilities averaged by Age
 ```{r}
-s_egg_sim_results %>%
-  group_by(age) %>%
-  summarise(
-    prob_success = mean(success_sim, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  arrange(age) %>%
+eggmodel_sim_results |>
+  dplyr::group_by(age) |>
+  dplyr::reframe(
+    pct_success_90 = mean(success_90, na.rm = TRUE),
+    pct_success_95 = mean(success_95, na.rm = TRUE),
+  ) |>
+  dplyr::arrange(age) |>
   knitr::kable()
+```
+
+```{r}
+### Plot of simulated payout
+# payout_amount <- 22000
+# 
+# eup_df <- eggmodel_sim_results %>%
+#   mutate(
+#     pred_fail_p = 1 - pred_egg,
+#     pred_payout = pred_fail_p * payout_amount
+#   ) %>%
+#   group_by(age) %>%
+#   summarise(
+#     mean_pred_payout = mean(pred_payout, na.rm = TRUE),
+#     sd_pred_payout = sd(pred_payout, na.rm = TRUE),
+#     number_patients = n(),
+#     .groups = "drop"
+#   )
+# 
+# eup_df %>%
+#   ggplot(aes(x = age, y = mean_pred_payout)) +
+#   geom_smooth(linewidth = 1, color = "#2C7FB8") +
+#   geom_point(size = 2.5, color = "#2C7FB8", alpha = 0.8) +
+#   labs(
+#     title = "Expected Insurance Payout by Age",
+#     subtitle = "Euploid Embryo Model",
+#     x = "Age (years)",
+#     y = "Average Predicted Payout ($)"
+#   ) +
+#   scale_y_continuous(labels = scales::dollar_format()) +
+#   scale_x_continuous(limits = c(30, 42), breaks = 30:42) +
+#   theme_minimal(base_size = 13) +
+#   theme(
+#     plot.title = element_text(face = "bold", size = 16),
+#     plot.subtitle = element_text(size = 12, color = "gray40"),
+#     axis.title = element_text(face = "bold"),
+#     axis.text = element_text(color = "gray20"),
+#     panel.grid.minor = element_blank()
+#   )
+```
+
+<!-- The one-cycle egg model's measure of dispersion is `r check_dispersion(egg_model)`. -->
+
+```{r}
+# ### Plot Predicted payouts
+# p3_df = single_cycle_egg_df |> 
+#   dplyr::mutate(pred_fail_p = 1 - pred_p) |> 
+#   dplyr::mutate(pred_payout = pred_fail_p * 20000) |>  # Arbitrary amount of payout!
+#   dplyr::group_by(age, amh) |> 
+#   dplyr::reframe(mean_pred_payout = mean(pred_payout, na.rm=T))
+# 
+# p3_df |> 
+#   ggplot(aes(x = age, y = mean_pred_payout)) +
+#   geom_line(aes(col = amh)) +
+#   # geom_smooth(aes(group = amh_bin, colour = amh_bin), method = 'lm') +
+#   geom_point(aes(colour = amh)) + 
+#   # facet_wrap( ~ amh_bin, ncol = 1) +
+#   labs(y = "Total Simulated Payout by Age", colour = 'AMH bin', x = "Age") +
+#   scale_y_continuous(labels = scales::dollar) +
+#   scale_x_continuous(limits = c(30,42)) + 
+#   theme_minimal()
+```
+
+```{r}
+### Simulated Probabilities averaged by Age
+# s_egg_sim_results %>%
+#   group_by(age) %>%
+#   summarise(
+#     prob_success = mean(success_sim, na.rm = TRUE),
+#     .groups = "drop"
+#   ) %>%
+#   arrange(age) %>%
+#   knitr::kable()
 ```
 
 ## Two-cycle Egg Model (Binomial model) {.tabset}
@@ -934,186 +548,286 @@ Note: this model assumes that treatments that occur within 365 days belong to a 
 ### Model Outputs
 
 ```{r}
-threshold_two <- 15
-
-# Keep patients with at least 2 cycles, then summarize first 2 cycles only
-df_multiple <- df %>%
-  filter(
-    !is.na(age),
-    !is.na(afc),
-    !is.na(amh),
-    !is.na(num_eggs_collected),
-    !is.na(treatment_start_date)
+df_2 <- df %>%
+  dplyr::arrange(pat_id, treatment_start_date) %>%
+  dplyr::group_by(pat_id) %>%
+  dplyr::mutate(
+    eggs_cycle1 = num_eggs_collected,
+    eggs_cycle2 = dplyr::lead(num_eggs_collected),
+    eggs_2cycle_total = eggs_cycle1 + eggs_cycle2
   ) %>%
-  arrange(pat_id, treatment_start_date) %>%
-  group_by(pat_id) %>%
-  mutate(cycle_order = row_number()) %>%
-  filter(n() >= 2) %>%
-  filter(cycle_order <= 2) %>%
-  summarise(
-    total_eggs_first2 = sum(num_eggs_collected, na.rm = TRUE),
-    eggs_cycle1 = first(num_eggs_collected),
-    age = first(age),
-    # age_group = first(age_group),
-    amh = first(amh),
-    afc = first(afc),
-    attempts = n(),
-    .groups = "drop"
-  ) %>%
-  mutate(
-    successes = as.numeric(total_eggs_first2 >= threshold_two)#,
-    # amh_bin = case_when(
-    #   amh < 0.5 ~ "Very low",
-    #   amh >= 0.5 & amh < 1.0 ~ "Low",
-    #   amh >= 1.0 & amh <= 3.0 ~ "Normal",
-    #   amh > 3.0 ~ "High"
-    # ),
-    # amh_bin = factor(amh_bin, levels = c("Very low", "Low", "Normal", "High"))
-  )
+  dplyr::filter(!is.na(eggs_2cycle_total)) %>%
+  dplyr::ungroup()
 
-two_egg_model <- glm(
-  successes ~ age + afc + amh + eggs_cycle1,
-  family = binomial,
-  data = df_multiple
+# Ensure we don't have missing data for any of our variables.
+df_2 = df_2 |> 
+  dplyr::select(pat_id, eggs_2cycle_total, age, amh, afc, eggs_cycle1, eggs_cycle2, eggs_2cycle_total) |> 
+  tidyr::drop_na()
+
+egg2_model <- glm(
+  eggs_2cycle_total ~ age + amh + afc + eggs_cycle1,
+  family = quasipoisson(link = "log"),
+  data = df_2
 )
 
-validate_model(two_egg_model, df_multiple, "successes")
+df_2$pred_eggmodel_2 = predict(egg2_model, new_data = df_2, type = "response")
 
-# Save model to disk
-two_egg_model |> readr::write_rds("data/models/two_egg_model.rds")
+# Next, for each patient, based on their characteristics (age, afc, amh), simulate 
+# 2000 hypothetical egg gathering treatments; these make up the simulated
+# expectable distribution that is unique to that patient. We then take 
+# out the 90th and 95th percentile of expectable eggs and use that as a 
+# threshold for whether or not a simulated session would be successful
+# for this patient. It's all about likelihoods!
+egg_2cycle_simulated_thresholds_by_patient = df_2 |> 
+  dplyr::group_by(pat_id) |> 
+  dplyr::group_split() |> 
+  purrr::map( ~ {
+    sim_egg_2cycle_distribution = simulate_eggs2(.x)
+    sim_egg_2cycle_90 = quantile(sim_egg_2cycle_distribution, 0.1)
+    sim_egg_2cycle_95 = quantile(sim_egg_2cycle_distribution, 0.05)
+    output = data.frame(
+      pat_id = .x$pat_id,
+      sim_egg_2cycle_90,
+      sim_egg_2cycle_95
+    )
+    row.names(output) = NULL
+    output |> tidyr::as_tibble()
+  },.progress) |> 
+  dplyr::bind_rows() |> 
+  dplyr::distinct() |> 
+  suppressWarnings()
 
-two_egg_model_summary <- coef(summary(two_egg_model)) %>%
-  as.data.frame()
+df2_with_thresholds <- df_2 |>
+  dplyr::left_join(egg_2cycle_simulated_thresholds_by_patient, by = "pat_id")
 
-# Add predicted probabilities
-df_multiple <- df_multiple %>%
-  mutate(
-    pred_p = predict(two_egg_model, newdata = df_multiple, type = "response")
-  )
+# Now we simulate a single 'draw' for each patient, compare that draw to the 
+# patient-specific distribution of expectable number of eggs, and classify
+# the draw as either a success or a failure (i.e. above or below the threshold, respectively)
+eggmodel2_sim_results <- df2_with_thresholds |>
+  dplyr::rowwise() %>%
+  dplyr::mutate(
+    sim_eggs_two_cycle = simulate_eggs2(., n = 1),
+    success_90 = sim_eggs_two_cycle >= sim_egg_2cycle_90,
+    success_95 = sim_eggs_two_cycle >= sim_egg_2cycle_95
+  ) |>
+  dplyr::ungroup()
 
-# Simulate outcomes per patient
-set.seed(123)
+eggmodel2_sim_results |> 
+  dplyr::count(success_90, success_95) |> 
+  dplyr::mutate(percentage = round(100*n/sum(n),4))
 
-df_multiple_sim_results <- df_multiple %>%
-  mutate(
-    success_sim = rbinom(n(), size = 1, prob = pred_p)
-  )
-
-print("The following table represents predicted successes or failures at the unique pat_id level based on the two-cycle egg binomial model.")
-
-df_multiple_sim_results %>%
-  DT::datatable()
-```
-
-### Plot Predicted payouts
-```{r}
-p4_df = df_multiple |> 
-  dplyr::mutate(pred_fail_p = 1 - pred_p) |> 
-  dplyr::mutate(pred_payout = pred_fail_p * 20000) |>  # Arbitrary amount of payout!
-  dplyr::group_by(age, amh) |> 
-  dplyr::reframe(mean_pred_payout = mean(pred_payout, na.rm=T))
-
-p4_df |> 
-  ggplot(aes(x = age, y = mean_pred_payout)) +
-  geom_line(aes(col = amh)) +
-  # geom_smooth(aes(group = amh_bin, colour = amh_bin), method = 'lm') +
-  geom_point(aes(colour = amh)) + 
-  # facet_wrap( ~ amh_bin, ncol = 1) +
-  labs(y = "Total Simulated Payout by Age", colour = 'AMH bin', x = "Age") +
-  scale_y_continuous(labels = scales::dollar) +
-  scale_x_continuous(limits = c(30,42)) + 
-  theme_minimal()
 ```
 
 ### Simulated Probabilities averaged by Age
 ```{r}
-df_multiple_sim_results %>%
-  group_by(age) %>%
-  summarise(
-    prob_fifteen_eggs_or_more_sim = mean(success_sim, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  arrange(age) %>%
+eggmodel2_sim_results |>
+  dplyr::group_by(age) |>
+  dplyr::reframe(
+    pct_success_90 = mean(success_90, na.rm = TRUE),
+    pct_success_95 = mean(success_95, na.rm = TRUE),
+  ) |>
+  dplyr::arrange(age) |>
   knitr::kable()
 ```
 
-```{r}
-# Pricing Outputs
-calc_pricing <- function(expected_payout_vec, model_name) {
-  tibble::tibble(
-    model = model_name,
-    expected_cost = mean(expected_payout_vec, na.rm = TRUE),
-    var_95 = quantile(expected_payout_vec, 0.95, na.rm = TRUE),
-    premium = expected_cost * (1 + risk_margin + admin_load)
-  )
-}
+```{r, include = F}
+# Euploid model ROC / AUC
+roc_livebirth <- roc(livebirth_sim_results$livebirth_success_simulated, livebirth_sim_results$pred_live_birth)
+auc_livebirth <- auc(roc_livebirth)
+roc_euploid <- roc(m1df$euploid_success, m1df$pred_euploid)
+auc_euploid <- auc(roc_euploid)
+roc_egg1 <- roc(eggmodel_sim_results$success_90, eggmodel_sim_results$pred_eggmodel_1)
+auc_egg1 <- auc(roc_egg1)
+roc_egg2 <- roc(eggmodel2_sim_results$success_90, eggmodel2_sim_results$pred_eggmodel_2)
+auc_egg2 <- auc(roc_egg2)
 
-# Use the same payout amount consistently
-payout_amount <- 22000
+# --- INTERPRETATION GUIDE ---
+# AUC < 0.60 → Poor model (not usable)
+# AUC 0.60–0.70 → Weak (needs improvement or more predictors)
+# AUC 0.70–0.80 → Acceptable
+# AUC 0.80–0.90 → Strong
+# AUC > 0.90 → Possibly overfit (check carefully)
 
-# 1. Clinical pregnancy model
-live_birth_costs <- live_birth_sim_results %>%
-  mutate(
-    pred_fail_p = 1 - pred_p,
-    expected_payout = pred_fail_p * payout_amount
-  )
+# plot(roc_euploid)
 
-live_birth_results <- calc_pricing(
-  expected_payout_vec = live_birth_costs$expected_payout,
-  model_name = "Live-birth Model"
-)
+# Dispersion checks
+disp_livebirth = check_dispersion(live_birth_model)
+disp_euploid <- check_dispersion(euploid_model)
+disp_egg <- check_dispersion(egg_model)
+disp_egg2 <- check_dispersion(egg2_model)
 
-# 2. Euploid embryo model
-euploid_costs <- euploid_sim_results %>%
-  mutate(
-    pred_fail_p = 1 - prob_ge1_euploid,
-    expected_payout = pred_fail_p * payout_amount
-  )
-
-euploid_results <- calc_pricing(
-  expected_payout_vec = euploid_costs$expected_payout,
-  model_name = "Euploid Embryo"
-)
-
-# 3. Single-cycle egg model
-s_egg_costs <- single_cycle_egg_df %>%
-  mutate(
-    pred_fail_p = 1 - pred_p,
-    expected_payout = pred_fail_p * payout_amount
-  )
-
-egg_results <- calc_pricing(
-  expected_payout_vec = s_egg_costs$expected_payout,
-  model_name = "Single-Cycle Egg"
-)
-
-# 4. Two-cycle egg model
-two_egg_costs <- df_multiple %>%
-  mutate(
-    pred_fail_p = 1 - pred_p,
-    expected_payout = pred_fail_p * payout_amount
-  )
-
-two_results <- calc_pricing(
-  expected_payout_vec = two_egg_costs$expected_payout,
-  model_name = "Two-Cycle Egg"
-)
 ```
 
-# Final Comparison
+# Model Validation
+```{r}
+############################################################
+# Validation Summary Table
+############################################################
+
+validation_summary <- data.frame(
+  Model = c("Live Birth","Euploid", "Egg 1 Cycle", "Egg 2 Cycle"),
+  AUC = c(auc_livebirth, auc_euploid, auc_egg1, auc_egg2),
+  Dispersion = c(disp_livebirth, disp_euploid, disp_egg, disp_egg2)
+)
+
+validation_summary |> knitr::kable()
+```
+
+# Example Monte-Carlo Simulations
+```{r}
+new_patient <- eggmodel_sim_results[1,]
+# previously_simulated_thresholds = df1_wit
+
+#May have to change number of breaks depending on eggs, could adjust to 15 if fewer is needed
+hist(simulate_eggs(new_patient), breaks = 30)
+hist(simulate_eggs2(eggmodel2_sim_results[1,]), breaks = 30)
+
+############################################################
+# Histogram with Threshold lines (1-CYCLE)
+############################################################
+
+plot_egg_distribution <- function(newdata) {
+
+  sims <- simulate_eggs(newdata)
+
+  t90 <- quantile(sims, 0.10)
+  t95 <- quantile(sims, 0.05)
+
+  simulated_distribution = sims |> 
+    table() |> 
+    as.data.frame() |> 
+    dplyr::rename(number_eggs_1_cycle = sims, count = Freq) |> 
+    tidyr::as_tibble() |> 
+    dplyr::mutate(the_simulated_eggs = number_eggs_1_cycle == newdata$sim_eggs_one_cycle)
+  
+  ggplot() + 
+    geom_col(aes(x = number_eggs_1_cycle, y = count, fill = the_simulated_eggs), data = simulated_distribution) +
+    geom_vline(xintercept = newdata$sim_egg_1cycle_90, lty = 2, col = 'orange', linewidth = 1) + 
+    geom_vline(xintercept = newdata$sim_egg_1cycle_95, lty = 2, col = 'red', linewidth = 1) + 
+    scale_fill_manual(values = c("TRUE" = "purple", "FALSE" = "darkgrey")) +
+    labs(title = "Patient-level Simulated Number of Eggs Retrieved",
+         subtitle = "Compared to simulated distribution based on age, AFC, and AMH (2000 MC runs)",
+         caption = "Red line is 5th quantile and orange line is 10th quantile",
+         x = "Simulated Egg Distribution in 1 Cycle",
+         y = "Number of Simulated 'draws'") + 
+    theme_minimal()
+}
+
+# Run it
+plot_egg_distribution(new_patient)
+
+```
 
 ```{r}
-final_results <- bind_rows(
-  live_birth_results,
-  euploid_results,
-  egg_results,
-  two_results
-) %>%
-  mutate(
-    expected_cost = scales::dollar(expected_cost),
-    var_95 = scales::dollar(var_95),
-    premium = scales::dollar(premium)
-  )
+# ### Plot Predicted payouts
+# 
+# p4_df = df_multiple |> 
+#   dplyr::mutate(pred_fail_p = 1 - pred_p) |> 
+#   dplyr::mutate(pred_payout = pred_fail_p * 20000) |>  # Arbitrary amount of payout!
+#   dplyr::group_by(age, amh) |> 
+#   dplyr::reframe(mean_pred_payout = mean(pred_payout, na.rm=T))
+# 
+# p4_df |> 
+#   ggplot(aes(x = age, y = mean_pred_payout)) +
+#   geom_line(aes(col = amh)) +
+#   # geom_smooth(aes(group = amh_bin, colour = amh_bin), method = 'lm') +
+#   geom_point(aes(colour = amh)) + 
+#   # facet_wrap( ~ amh_bin, ncol = 1) +
+#   labs(y = "Total Simulated Payout by Age", colour = 'AMH bin', x = "Age") +
+#   scale_y_continuous(labels = scales::dollar) +
+#   scale_x_continuous(limits = c(30,42)) + 
+#   theme_minimal()
+```
 
-knitr::kable(final_results)
+```{r}
+# ### Simulated Probabilities averaged by Age
+# 
+# df_multiple_sim_results %>%
+#   group_by(age) %>%
+#   summarise(
+#     prob_fifteen_eggs_or_more_sim = mean(success_sim, na.rm = TRUE),
+#     .groups = "drop"
+#   ) %>%
+#   arrange(age) %>%
+#   knitr::kable()
+```
+
+```{r}
+# # Pricing Outputs
+# calc_pricing <- function(expected_payout_vec, model_name) {
+#   tibble::tibble(
+#     model = model_name,
+#     expected_cost = mean(expected_payout_vec, na.rm = TRUE),
+#     var_95 = quantile(expected_payout_vec, 0.95, na.rm = TRUE),
+#     premium = expected_cost * (1 + risk_margin + admin_load)
+#   )
+# }
+# 
+# # Use the same payout amount consistently
+# payout_amount <- 22000
+# 
+# # 1. Clinical pregnancy model
+# live_birth_costs <- live_birth_sim_results %>%
+#   mutate(
+#     pred_fail_p = 1 - pred_p,
+#     expected_payout = pred_fail_p * payout_amount
+#   )
+# 
+# live_birth_results <- calc_pricing(
+#   expected_payout_vec = live_birth_costs$expected_payout,
+#   model_name = "Live-birth Model"
+# )
+# 
+# # 2. Euploid embryo model
+# euploid_costs <- euploid_sim_results %>%
+#   mutate(
+#     pred_fail_p = 1 - prob_ge1_euploid,
+#     expected_payout = pred_fail_p * payout_amount
+#   )
+# 
+# euploid_results <- calc_pricing(
+#   expected_payout_vec = euploid_costs$expected_payout,
+#   model_name = "Euploid Embryo"
+# )
+# 
+# # 3. Single-cycle egg model
+# s_egg_costs <- single_cycle_egg_df %>%
+#   mutate(
+#     pred_fail_p = 1 - pred_p,
+#     expected_payout = pred_fail_p * payout_amount
+#   )
+# 
+# egg_results <- calc_pricing(
+#   expected_payout_vec = s_egg_costs$expected_payout,
+#   model_name = "Single-Cycle Egg"
+# )
+# 
+# # 4. Two-cycle egg model
+# two_egg_costs <- df_multiple %>%
+#   mutate(
+#     pred_fail_p = 1 - pred_p,
+#     expected_payout = pred_fail_p * payout_amount
+#   )
+# 
+# two_results <- calc_pricing(
+#   expected_payout_vec = two_egg_costs$expected_payout,
+#   model_name = "Two-Cycle Egg"
+# )
+```
+
+```{r}
+# # Final Comparison
+# final_results <- bind_rows(
+#   live_birth_results,
+#   euploid_results,
+#   egg_results,
+#   two_results
+# ) %>%
+#   mutate(
+#     expected_cost = scales::dollar(expected_cost),
+#     var_95 = scales::dollar(var_95),
+#     premium = scales::dollar(premium)
+#   )
+# 
+# knitr::kable(final_results)
 ```
