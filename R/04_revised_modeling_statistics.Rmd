@@ -401,9 +401,9 @@ Note: this model uses the patient / cycle-level table and does not currently fil
 df_no_na = df |> dplyr::select(pat_id, tx_id, num_eggs_collected, age, amh, afc) |> tidyr::drop_na()
 
 # First, construct a Poisson-distribution of the number of eggs collected based on the data we have
-egg_model <- glm(
+egg_model <- MASS::glm.nb(
   num_eggs_collected ~ age + amh + afc,
-  family = quasipoisson(link = "log"),
+  # family = quasipoisson(link = "log"),
   data = df_no_na
 )
 
@@ -453,6 +453,18 @@ eggmodel_sim_results |>
   dplyr::count(success_90, success_95) |> 
   dplyr::mutate(percentage = round(100*n/sum(n),4))
 
+# Conversion of simulated successes/failures to predicted probabilities so we can
+# apply the same model tests and validations to the egg models as we do to 
+# the live-birth and euploid embryo eggs.
+eggmodel_sim_results <- eggmodel_sim_results %>%
+  dplyr::mutate(
+    pred_prob_success_90 = estimate_prob_success(
+      ., simulate_eggs, "sim_egg_1cycle_90", n_sim = 1000
+    ),
+    pred_prob_success_95 = estimate_prob_success(
+      ., simulate_eggs, "sim_egg_1cycle_95", n_sim = 1000
+    )
+  )
 ```
 
 ### Simulated Probabilities averaged by Age
@@ -465,79 +477,6 @@ eggmodel_sim_results |>
   ) |>
   dplyr::arrange(age) |>
   knitr::kable()
-```
-
-```{r}
-### Plot of simulated payout
-# payout_amount <- 22000
-# 
-# eup_df <- eggmodel_sim_results %>%
-#   mutate(
-#     pred_fail_p = 1 - pred_egg,
-#     pred_payout = pred_fail_p * payout_amount
-#   ) %>%
-#   group_by(age) %>%
-#   summarise(
-#     mean_pred_payout = mean(pred_payout, na.rm = TRUE),
-#     sd_pred_payout = sd(pred_payout, na.rm = TRUE),
-#     number_patients = n(),
-#     .groups = "drop"
-#   )
-# 
-# eup_df %>%
-#   ggplot(aes(x = age, y = mean_pred_payout)) +
-#   geom_smooth(linewidth = 1, color = "#2C7FB8") +
-#   geom_point(size = 2.5, color = "#2C7FB8", alpha = 0.8) +
-#   labs(
-#     title = "Expected Insurance Payout by Age",
-#     subtitle = "Euploid Embryo Model",
-#     x = "Age (years)",
-#     y = "Average Predicted Payout ($)"
-#   ) +
-#   scale_y_continuous(labels = scales::dollar_format()) +
-#   scale_x_continuous(limits = c(30, 42), breaks = 30:42) +
-#   theme_minimal(base_size = 13) +
-#   theme(
-#     plot.title = element_text(face = "bold", size = 16),
-#     plot.subtitle = element_text(size = 12, color = "gray40"),
-#     axis.title = element_text(face = "bold"),
-#     axis.text = element_text(color = "gray20"),
-#     panel.grid.minor = element_blank()
-#   )
-```
-
-<!-- The one-cycle egg model's measure of dispersion is `r check_dispersion(egg_model)`. -->
-
-```{r}
-# ### Plot Predicted payouts
-# p3_df = single_cycle_egg_df |> 
-#   dplyr::mutate(pred_fail_p = 1 - pred_p) |> 
-#   dplyr::mutate(pred_payout = pred_fail_p * 20000) |>  # Arbitrary amount of payout!
-#   dplyr::group_by(age, amh) |> 
-#   dplyr::reframe(mean_pred_payout = mean(pred_payout, na.rm=T))
-# 
-# p3_df |> 
-#   ggplot(aes(x = age, y = mean_pred_payout)) +
-#   geom_line(aes(col = amh)) +
-#   # geom_smooth(aes(group = amh_bin, colour = amh_bin), method = 'lm') +
-#   geom_point(aes(colour = amh)) + 
-#   # facet_wrap( ~ amh_bin, ncol = 1) +
-#   labs(y = "Total Simulated Payout by Age", colour = 'AMH bin', x = "Age") +
-#   scale_y_continuous(labels = scales::dollar) +
-#   scale_x_continuous(limits = c(30,42)) + 
-#   theme_minimal()
-```
-
-```{r}
-### Simulated Probabilities averaged by Age
-# s_egg_sim_results %>%
-#   group_by(age) %>%
-#   summarise(
-#     prob_success = mean(success_sim, na.rm = TRUE),
-#     .groups = "drop"
-#   ) %>%
-#   arrange(age) %>%
-#   knitr::kable()
 ```
 
 ## Two-cycle Egg Model (Binomial model) {.tabset}
@@ -564,9 +503,9 @@ df_2 = df_2 |>
   dplyr::select(pat_id, eggs_2cycle_total, age, amh, afc, eggs_cycle1, eggs_cycle2, eggs_2cycle_total) |> 
   tidyr::drop_na()
 
-egg2_model <- glm(
+egg2_model <- MASS::glm.nb(
   eggs_2cycle_total ~ age + amh + afc + eggs_cycle1,
-  family = quasipoisson(link = "log"),
+  # family = quasipoisson(link = "log"),
   data = df_2
 )
 
@@ -616,6 +555,15 @@ eggmodel2_sim_results |>
   dplyr::count(success_90, success_95) |> 
   dplyr::mutate(percentage = round(100*n/sum(n),4))
 
+eggmodel2_sim_results <- eggmodel2_sim_results %>%
+  dplyr::mutate(
+    pred_prob_success_90 = estimate_prob_success(
+      ., simulate_eggs2, "sim_egg_2cycle_90", n_sim = 1000
+    ),
+    pred_prob_success_95 = estimate_prob_success(
+      ., simulate_eggs2, "sim_egg_2cycle_95", n_sim = 1000
+    )
+  )
 ```
 
 ### Simulated Probabilities averaged by Age
@@ -655,22 +603,178 @@ disp_livebirth = check_dispersion(live_birth_model)
 disp_euploid <- check_dispersion(euploid_model)
 disp_egg <- check_dispersion(egg_model)
 disp_egg2 <- check_dispersion(egg2_model)
-
 ```
 
 # Model Validation
 ```{r}
-############################################################
-# Validation Summary Table
-############################################################
-
 validation_summary <- data.frame(
   Model = c("Live Birth","Euploid", "Egg 1 Cycle", "Egg 2 Cycle"),
   AUC = c(auc_livebirth, auc_euploid, auc_egg1, auc_egg2),
   Dispersion = c(disp_livebirth, disp_euploid, disp_egg, disp_egg2)
-)
+) |> 
+  dplyr::mutate(interaction_term = 'None')
 
 validation_summary |> knitr::kable()
+```
+
+# Models Including Interaction Terms
+```{r}
+model_specs <- list(
+  
+  # --- Euploid ---
+  euploid_base = list(
+    data = m1df,
+    formula = euploid_success ~ age + amh + afc,
+    family = binomial,
+    family_text = 'binomial',
+    outcome = "euploid_success"
+  ),
+  
+  euploid_interaction = list(
+    data = m1df,
+    formula = euploid_success ~ age + amh * afc,
+    family = binomial,
+    family_text = 'binomial',
+    outcome = "euploid_success"
+  ),
+  
+  # --- Live birth ---
+  livebirth_base = list(
+    data = m1df_eup,
+    formula = birth_bool ~ age + amh + afc,
+    family = quasibinomial,
+    family_text = 'quasibinomial',
+    outcome = "birth_bool"
+  ),
+  
+  livebirth_interaction = list(
+    data = m1df_eup,
+    formula = birth_bool ~ age + amh * afc,
+    family = quasibinomial,
+    family_text = 'quasibinomial',
+    outcome = "birth_bool"
+  ),
+  
+  egg1_base = list(
+    data = df_no_na,
+    formula = num_eggs_collected ~ age + amh + afc,
+    family = quasipoisson(link = "log"),
+    family_text = "egg",
+    outcome = "num_eggs_collected"
+  ),
+  
+  egg1_interaction = list(
+    data = df_no_na,
+    formula = num_eggs_collected ~ age + amh * afc,
+    family = quasipoisson(link = "log"),
+    family_text = "egg",
+    outcome = "num_eggs_collected"
+  ),
+  
+  egg2_base = list(
+    data = df_2,
+    formula = eggs_2cycle_total ~ age + amh + afc,
+    family = quasipoisson(link = "log"),
+    family_text = "egg",
+    outcome = "eggs_2cycle_total"
+  ),
+  
+  egg2_interaction = list(
+    data = df_2,
+    formula = eggs_2cycle_total ~ age + amh * afc,
+    family = quasipoisson(link = "log"),
+    family_text = "egg",
+    outcome = "eggs_2cycle_total"
+  )
+)
+
+# Apply model specs list! Let's see what the results look like.
+model_results <- purrr::imap(model_specs, function(spec, name) {
+  
+  if(spec$family_text == "egg"){
+    model = MASS::glm.nb(spec$formula, data = spec$data)
+  } else{
+    model <- glm(spec$formula, data = spec$data, family = spec$family)
+  }
+  
+  dispersion = check_dispersion(model)
+  
+  # Only compute AUC/Brier if binomial-type outcome
+  is_binary <- spec$family_text %in% c("binomial", "quasibinomial")
+  is_egg <- spec$family_text == "egg"
+  
+  metrics <- NULL
+  
+  if (is_egg) {
+    
+    data <- spec$data
+    data$pred <- predict(model, newdata = data, type = "response")
+    
+    # Re-run simulation using THIS model
+    sim_results <- data |>
+      dplyr::rowwise() %>%
+      dplyr::mutate(
+        sim_val = simulate_eggs(., n = 1),   # or simulate_eggs2
+        success = sim_val >= quantile(simulate_eggs(.), 0.1)
+      ) |>
+      dplyr::ungroup()
+    
+    # Estimate probabilities
+    sim_results <- sim_results %>%
+      dplyr::mutate(
+        pred_prob = estimate_prob_success(
+          ., simulate_eggs, "success", n_sim = 500
+        )
+      )
+    
+    metrics <- get_metrics_from_probs(
+      observed = sim_results$success,
+      predicted = sim_results$pred_prob
+    )
+    
+  } else if (is_binary) {
+    metrics <- get_metrics(model, spec$data, spec$outcome)
+  } else {
+    metrics <- c(AIC = AIC(model))
+  }
+  
+  cv <- if (is_binary) {
+    cv_evaluate(spec$formula, spec$data, spec$outcome, spec$family)
+  } else {
+    NULL
+  }
+  
+  metrics['Dispersion'] = dispersion[[1]]
+  
+  list(
+    model = model,
+    metrics = metrics,
+    cv_sd = if (!is.null(cv)) sd(cv$AUC, na.rm = TRUE) else NA
+  )
+}) |> 
+  suppressMessages()
+
+model_summary <- purrr::imap_dfr(model_results, function(res, name) {
+  tibble::tibble(
+    model = name,
+    AUC = res$metrics["AUC"] %||% NA,
+    Brier = res$metrics["Brier"] %||% NA,
+    Cal_Slope = res$metrics["Cal_Slope"] %||% NA,
+    CV_AUC_SD = res$cv_sd,
+    AIC = res$metrics["AIC"] %||% NA,
+    Dispersion = res$metrics["Dispersion"] %||% NA
+  )
+})
+
+model_summary <- model_summary %>%
+  dplyr::left_join(
+    validation_summary %>% 
+      dplyr::select(Model, Dispersion) |> 
+      dplyr::mutate(model = snakecase::to_snake_case(Model)) |> 
+      dplyr::select(-Model)
+  )
+
+model_summary |> knitr::kable()
 ```
 
 # Example Monte-Carlo Simulations
