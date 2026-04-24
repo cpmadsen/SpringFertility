@@ -605,7 +605,7 @@ disp_egg <- check_dispersion(egg_model)
 disp_egg2 <- check_dispersion(egg2_model)
 ```
 
-# Model Validation
+# Base Model Validation
 ```{r}
 validation_summary <- data.frame(
   Model = c("Live Birth","Euploid", "Egg 1 Cycle", "Egg 2 Cycle"),
@@ -619,82 +619,76 @@ validation_summary |> knitr::kable()
 
 # Models Including Interaction Terms
 ```{r}
-model_specs <- list(
-  
-  # --- Euploid ---
-  euploid_base = list(
-    data = m1df,
-    formula = euploid_success ~ age + amh + afc,
-    family = binomial,
-    family_text = 'binomial',
-    outcome = "euploid_success"
-  ),
-  
-  euploid_interaction = list(
-    data = m1df,
-    formula = euploid_success ~ age + amh * afc,
-    family = binomial,
-    family_text = 'binomial',
-    outcome = "euploid_success"
-  ),
-  
-  # --- Live birth ---
-  livebirth_base = list(
-    data = m1df_eup,
-    formula = birth_bool ~ age + amh + afc,
-    family = quasibinomial,
-    family_text = 'quasibinomial',
-    outcome = "birth_bool"
-  ),
-  
-  livebirth_interaction = list(
-    data = m1df_eup,
-    formula = birth_bool ~ age + amh * afc,
-    family = quasibinomial,
-    family_text = 'quasibinomial',
-    outcome = "birth_bool"
-  ),
-  
-  egg1_base = list(
-    data = df_no_na,
-    formula = num_eggs_collected ~ age + amh + afc,
-    family = quasipoisson(link = "log"),
-    family_text = "egg",
-    outcome = "num_eggs_collected"
-  ),
-  
-  egg1_interaction = list(
-    data = df_no_na,
-    formula = num_eggs_collected ~ age + amh * afc,
-    family = quasipoisson(link = "log"),
-    family_text = "egg",
-    outcome = "num_eggs_collected"
-  ),
-  
-  egg2_base = list(
-    data = df_2,
-    formula = eggs_2cycle_total ~ age + amh + afc,
-    family = quasipoisson(link = "log"),
-    family_text = "egg",
-    outcome = "eggs_2cycle_total"
-  ),
-  
-  egg2_interaction = list(
-    data = df_2,
-    formula = eggs_2cycle_total ~ age + amh * afc,
-    family = quasipoisson(link = "log"),
-    family_text = "egg",
-    outcome = "eggs_2cycle_total"
+# loop over potential models.
+my_formulas = c(
+  "base" = "age + amh + afc",
+  "amh*afc" = "age + amh + afc + amh * afc",
+  "age*afc" = "age + amh + afc + age * afc",
+  "age*amh" = "age + amh + afc + amh * age",
+  "age*amh+age*afc" = "age + amh + afc + amh * age + afc * age",
+  "age*afc+amh*afc" = "age + amh + afc + afc * age + afc * amh",
+  "age*amh+amh*afc" = "age + amh + afc + amh * age + afc * amh",
+  "age*amh*afc" = "age + amh + afc + amh * age * afc"
   )
-)
+
+model_skeleton_list = list(
+      
+      # --- Euploid ---
+      euploid = list(
+        data = m1df,
+        formula = euploid_success ~ .x,
+        family = binomial,
+        family_text = 'binomial',
+        outcome = "euploid_success"
+      ),
+      
+      # --- Live birth ---
+      livebirth = list(
+        data = m1df_eup,
+        formula = birth_bool ~ .x,
+        family = quasibinomial,
+        family_text = 'quasibinomial',
+        outcome = "birth_bool"
+      ),
+      
+      egg1 = list(
+        data = df_no_na,
+        formula = num_eggs_collected ~ .x,
+        family = quasipoisson(link = "log"),
+        family_text = "egg",
+        outcome = "num_eggs_collected"
+      ),
+      
+      egg2 = list(
+        data = df_2,
+        formula = eggs_2cycle_total ~ .x,
+        family = quasipoisson(link = "log"),
+        family_text = "egg",
+        outcome = "eggs_2cycle_total"
+      )
+    )
+
+model_specs <- purrr::map(my_formulas, \(x){
+  purrr::map(model_skeleton_list, \(y){
+    dep_var = y$formula |> as.character()
+    dep_var = dep_var[2]
+    y$formula = paste0(dep_var," ~ ",x)
+    y
+  })
+})
 
 # Apply model specs list! Let's see what the results look like.
-model_results <- purrr::imap(model_specs, function(spec, name) {
+
+model_results = model_specs |> 
+  purrr::list_flatten() |> 
+  purrr::imap(function(spec, name) {
   
+    spec = purrr::list_flatten(spec)
+    
   if(spec$family_text == "egg"){
-    model = MASS::glm.nb(spec$formula, data = spec$data)
+    model = MASS::glm.nb(spec$formula, data = spec$data) |> suppressWarnings()
   } else{
-    model <- glm(spec$formula, data = spec$data, family = spec$family)
+    model <- glm(spec$formula, data = spec$data, family = spec$family) |> suppressWarnings()
   }
   
   dispersion = check_dispersion(model)
@@ -751,12 +745,15 @@ model_results <- purrr::imap(model_specs, function(spec, name) {
     metrics = metrics,
     cv_sd = if (!is.null(cv)) sd(cv$AUC, na.rm = TRUE) else NA
   )
-}) |> 
+},.progress=T) |> 
   suppressMessages()
 
 model_summary <- purrr::imap_dfr(model_results, function(res, name) {
   tibble::tibble(
-    model = name,
+    # Flip first and last bits of model name
+    model = paste0(stringr::str_extract(name,"(?<=_).*"), "_", stringr::str_extract(name,".*(?=_)")) |> 
+      # Oop, Markdown is converting * to italics on occasion... swap those out and put ' x '
+      stringr::str_replace_all("\\*", " x "),
     AUC = res$metrics["AUC"] %||% NA,
     Brier = res$metrics["Brier"] %||% NA,
     Cal_Slope = res$metrics["Cal_Slope"] %||% NA,
@@ -772,9 +769,202 @@ model_summary <- model_summary %>%
       dplyr::select(Model, Dispersion) |> 
       dplyr::mutate(model = snakecase::to_snake_case(Model)) |> 
       dplyr::select(-Model)
+  ) |> 
+  dplyr::arrange(model)
+
+model_summary |> 
+  knitr::kable()
+```
+
+# Test of Negative Binomial for Egg Models {.tabset}
+
+```{r}
+
+eg_patient = tidyr::tibble(
+  age = 35,
+  amh = mean(df_no_na$amh,na.rm=T),
+  afc = mean(df_no_na$afc,na.rm=T)
+) |> 
+  mutate(eggs_cycle1 = round(age * -0.3 + amh * 1.5 + afc * 0.4 + 10))
+
+n_sims = 5000
+
+compare_thresholds <- function(mu, theta_new, theta_old, n = n_sims) {
+  sims_new <- rnbinom(n, mu = mu, size = theta_new)
+  sims_old <- rnbinom(n, mu = mu, size = theta_old)
+
+  data.frame(
+    t90_new  = quantile(sims_new, 0.10),
+    t95_new  = quantile(sims_new, 0.05),
+    t90_old  = quantile(sims_old, 0.10),
+    t95_old  = quantile(sims_old, 0.05),
+    t90_diff = quantile(sims_new, 0.10) - quantile(sims_old, 0.10),
+    t95_diff = quantile(sims_new, 0.05) - quantile(sims_old, 0.05),
+    mean_new = mean(sims_new),
+    mean_old = mean(sims_old)
+  )
+}
+```
+
+## Egg Model 1
+
+```{r egg_model_1_effect_of_altering_theta}
+theta_egg1 = egg_model$theta
+theta_old = 5
+
+print(paste0("Model Theta: ",round(theta_egg1,4)))
+print(paste0("Model Theta SE: ",round(theta_old,4)))
+
+eg_patient %>%
+  dplyr::rowwise() %>%
+  dplyr::mutate(
+    mu_egg1  = predict(egg_model,  newdata = cur_data(), type = "response"),
+    egg1     = list(compare_thresholds(mu_egg1, theta_egg1, theta_old))
+  ) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(age, amh, afc, mu_egg1, egg1) %>%
+  tidyr::unnest_wider(egg1) %>%
+  dplyr::mutate(model = "Egg 1-Cycle") |> 
+  suppressWarnings() |> 
+  knitr::kable()
+```
+
+## Egg Model 2
+
+```{r egg_model_2_effect_of_altering_theta}
+theta_egg2 = egg2_model$theta
+theta_old = 5
+
+print(paste0("Model Theta: ",round(theta_egg2,4)))
+print(paste0("Model Theta SE: ",round(theta_old,4)))
+
+eg_patient %>%
+  dplyr::rowwise() %>%
+  dplyr::mutate(
+    mu_egg2  = predict(egg2_model,  newdata = cur_data(), type = "response"),
+    egg2     = list(compare_thresholds(mu_egg2, theta_egg2, theta_old))
+  ) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(age, amh, afc, mu_egg2, egg2) %>%
+  tidyr::unnest_wider(egg2) %>%
+  dplyr::mutate(model = "Egg 2-Cycle") |> 
+  suppressWarnings() |> 
+  knitr::kable()
+```
+
+# Comparison Plots for fixed versus fitted theta values {.tabset}
+```{r comparison_plots_for_egg_models_theta_values}
+
+mu1 <- predict(egg_model,  newdata = eg_patient, type = "response")
+mu2 <- predict(egg2_model, newdata = eg_patient, type = "response")
+
+plot_comparison <- function(mu, theta_new, theta_old, title_str, n = n_sims) {
+
+  sims_new <- rnbinom(n, mu = mu, size = theta_new)
+  sims_old <- rnbinom(n, mu = mu, size = theta_old)
+
+  t90_new <- quantile(sims_new, 0.10)
+  t95_new <- quantile(sims_new, 0.05)
+  t90_old <- quantile(sims_old, 0.10)
+  t95_old <- quantile(sims_old, 0.05)
+
+  plot_df <- bind_rows(
+    data.frame(eggs = sims_new, version = sprintf("Fitted theta = %.2f", theta_new)),
+    data.frame(eggs = sims_old, version = sprintf("Original theta = %.1f", theta_old))
   )
 
-model_summary |> knitr::kable()
+  vlines <- data.frame(
+    xint    = c(t90_new, t95_new, t90_old, t95_old),
+    version = c(
+      sprintf("Fitted theta = %.2f", theta_new),
+      sprintf("Fitted theta = %.2f", theta_new),
+      sprintf("Original theta = %.1f", theta_old),
+      sprintf("Original theta = %.1f", theta_old)
+    ),
+    label = c(
+      sprintf("90%% (%d eggs)", t90_new),
+      sprintf("95%% (%d eggs)", t95_new),
+      sprintf("90%% (%d eggs)", t90_old),
+      sprintf("95%% (%d eggs)", t95_old)
+    ),
+    lty = c("90%", "95%", "90%", "95%")
+  )
+
+  ggplot(plot_df, aes(x = eggs, fill = version)) +
+    geom_histogram(
+      aes(y = after_stat(density)),
+      binwidth = 1,
+      alpha    = 0.5,
+      position = "identity",
+      color    = "white",
+      linewidth = 0.2
+    ) +
+    geom_vline(
+      data     = vlines,
+      aes(xintercept = xint, color = version, linetype = lty),
+      linewidth = 0.9
+    ) +
+    geom_text(
+      data  = vlines,
+      aes(x = xint, y = Inf, label = label, color = version),
+      angle = 90, vjust = -0.4, hjust = 1.1, size = 3,
+      inherit.aes = FALSE
+    ) +
+    scale_linetype_manual(
+      name   = "Threshold",
+      values = c("90%" = "dashed", "95%" = "dotted")
+    ) +
+    scale_fill_manual(values  = c("#378ADD", "#D85A30")) +
+    scale_color_manual(values = c("#185FA5", "#993C1D")) +
+    labs(
+      title    = title_str,
+      subtitle = sprintf(
+        "Patient: age %f, AMH %.1f, AFC %f  |  90%% threshold shift: %+d eggs  |  95%% threshold shift: %+d eggs",
+        eg_patient$age, eg_patient$amh, eg_patient$afc,
+        as.integer(t90_new - t90_old),
+        as.integer(t95_new - t95_old)
+      ),
+      x     = "Eggs retrieved",
+      y     = "Density",
+      fill  = "Model version",
+      color = "Model version"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      plot.title    = element_text(face = "bold"),
+      plot.subtitle = element_text(color = "grey40", size = 10),
+      legend.position = "bottom"
+    ) |> 
+    suppressWarnings()
+}
+```
+
+## Egg Model 1
+```{r}
+plot_comparison(mu1, theta_egg1, theta_old,
+                "Egg 1-Cycle: Fitted vs. Original Theta")
+```
+
+## Egg Model 2
+```{r}
+plot_comparison(mu2, theta_egg2, theta_old,
+                "Egg 2-Cycle: Fitted vs. Original Theta")
+```
+
+```{r resimulate_egg_model_1_draws}
+# simulate_eggs <- function(newdata, theta_to_use, n = 2000) {
+#   mu <- predict(egg_model, newdata, type = "response")
+#   theta <- theta_to_use
+#   rnbinom(n, mu = mu, size = theta)
+# }
+```
+
+```{r compare_simulated_eggs_with_hardcoded_theta_and_model_theta_egg_model_1}
+# model_theta_sims = simulate_eggs(df_no_na, egg_model$theta)
+# hardcoded_theta_sims = simulate_eggs(df_no_na, 5)
+# 
+# compare_thresholds(model_theta_sims, theta_egg1, theta_old)
+
 ```
 
 # Example Monte-Carlo Simulations
