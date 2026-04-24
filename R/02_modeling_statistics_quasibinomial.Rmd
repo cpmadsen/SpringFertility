@@ -17,6 +17,7 @@ library(pROC)
 library(ResourceSelection)
 library(knitr)
 library(tidyr)
+library(readr)
 set.seed(123)
 ```
 
@@ -34,9 +35,16 @@ df <- df %>%
     age >= 35 & age <= 37 ~ "35-37",
     age >= 38 & age <= 40 ~ "38-40",
     age >= 41 ~ "41+"
+  )) %>%
+  mutate(amh_bin = case_when(
+    amh < 0.5 ~ "Very low",
+    amh >= 0.5 & amh < 1.0 ~ "Low",
+    amh >= 1.0 & amh <= 3.0 ~ "Normal",
+    amh > 3.0 ~ "High"
   ))
 
 df$age_group <- as.factor(df$age_group)
+df$amh_bin <- as.factor(df$amh_bin)
 
 # Number of unique PAT ids
 df = df |> dplyr::mutate(the_year = lubridate::year(treatment_start_date))
@@ -205,19 +213,31 @@ This filter reduces the number of rows of data in this cycle-level table from `r
 
 The model is this:
 
-$pregant \sim agegroup$
+$pregant \sim age + afc + amhbin$
 
 ```{r}
+# Clean data
+m1df <- m1df %>%
+  filter(
+    !is.na(pregnant),
+    !is.na(age),
+    !is.na(amh_bin),
+    !is.na(afc)
+  )
+
+# Model
 logit_model <- glm(
-  pregnant ~ age,
-  family = binomial(link = "logit"),
+  pregnant ~ age + amh_bin + afc,
+  family = binomial,
   data = m1df
 )
 
-validate_model(logit_model, data = m1df, 'pregnant')
+validate_model(logit_model, data = m1df, outcome = "pregnant")
 
+# Summary table
 logit_summary <- summary(logit_model)$coefficients
-kable(logit_summary, digits = 3)
+
+knitr::kable(logit_summary, digits = 3)
 ```
 
 ```{r}
@@ -271,7 +291,7 @@ kable(logit_infert_summary, digits = 3)
 
 ```{r}
 predicted_probs <- m1df %>%
-  distinct(age, primary_infertility_diagnosis_cl) %>%
+  distinct(age, amh_bin, afc, primary_infertility_diagnosis_cl) %>%
   mutate(predicted_p = predict(logit_model, newdata = ., type = "response")#,
          # predicted_p_infert = predict(logit_model_infert, newdata = ., type = "response")
          ) |> 
@@ -403,14 +423,14 @@ multi_cycle |>
 ## Attempt-Level Modeling
 
 ```{r}
-df_attempt_recalc <- m1df |> 
-  dplyr::group_by(pat_id) |> 
-  dplyr::arrange(treatment_start_date) |> 
-  dplyr::mutate(attempt_num = dplyr::row_number()) |> 
-  dplyr::ungroup()
+df_attempt_recalc <- m1df %>%
+  group_by(pat_id) %>%
+  arrange(treatment_start_date, .by_group = TRUE) %>%
+  mutate(attempt_num = row_number()) %>%
+  ungroup()
 
 attempt_model <- glm(
-  pregnant ~ age + attempt_num,
+  pregnant ~ age + afc + amh_bin + attempt_num,
   family = binomial,
   data = df_attempt_recalc
 )
@@ -422,10 +442,34 @@ kable(attempt_summary, digits = 3)
 ## Predicted Probability by Attempt
 
 ```{r}
-attempt_predictions <- expand.grid(
-  age = unique(m1df$age),
-  attempt_num = 1:3
+age_seq <- seq(
+  floor(min(df_attempt_recalc$age, na.rm = TRUE)),
+  ceiling(max(df_attempt_recalc$age, na.rm = TRUE)),
+  by = 1
 )
+
+cycle_seq <- sort(unique(df_attempt_recalc$attempt_num))
+cycle_seq <- cycle_seq[cycle_seq <= 3]
+
+# Calculate predicted probabilities given AFC/AMH per unique combination of age/cycle to maintain in-group distribution
+attempt_predictions <- df_attempt_recalc %>%
+  filter(attempt_num %in% 1:3) %>%
+  group_by(age, attempt_num) %>%
+  summarise(
+    afc = mean(afc, na.rm = TRUE),
+    amh = mean(amh, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    amh_bin = case_when(
+      amh < 0.5 ~ "Very low",
+      amh >= 0.5 & amh < 1.0 ~ "Low",
+      amh >= 1.0 & amh <= 3.0 ~ "Normal",
+      amh > 3.0 ~ "High",
+      TRUE ~ NA_character_
+    ),
+    amh_bin = factor(amh_bin, levels = c("Very low", "Low", "Normal", "High"))
+  )
 
 attempt_predictions$predicted_p <- predict(
   attempt_model,
@@ -433,35 +477,87 @@ attempt_predictions$predicted_p <- predict(
   type = "response"
 )
 
-attempt_predictions = attempt_predictions |> 
-  dplyr::group_by(attempt_num) |> 
-  dplyr::mutate(the_attempt_num = attempt_num) |> 
-  dplyr::group_split() |> 
-  purrr::map( ~ {
-    attempt_num = unique(.x$the_attempt_num)
-    summarise_to_age_classes(.x, 'predicted_p') |> 
-      dplyr::mutate(attempt_num)
-  }) |> 
-  dplyr::bind_rows()
 
-kable(attempt_predictions, digits = 3)
 
-ggplot(attempt_predictions, aes(x = attempt_num, y = predicted_p_mean, color = age_group)) +
-  geom_line() +
-  geom_point() +
+attempt_predictions_kable <- attempt_predictions %>%
+  mutate(
+    age_display = case_when(
+      age <= 30 ~ "<=30",
+      age >= 44 ~ ">=44",
+      TRUE ~ as.character(age)
+    )
+  ) %>%
+  group_by(age_display, attempt_num) %>%
+  summarise(
+    afc = mean(afc, na.rm = TRUE),
+    amh = mean(amh, na.rm = TRUE),
+    predicted_p = mean(predicted_p, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    amh_bin = case_when(
+      amh < 0.5 ~ "Very low",
+      amh >= 0.5 & amh < 1.0 ~ "Low",
+      amh >= 1.0 & amh <= 3.0 ~ "Normal",
+      amh > 3.0 ~ "High",
+      TRUE ~ NA_character_
+    ),
+    amh_bin = factor(amh_bin, levels = c("Very low", "Low", "Normal", "High")),
+    age_display = factor(age_display, levels = c("<=30", as.character(31:43), ">=44"))
+  ) %>%
+  arrange(age_display, attempt_num)
+
+kable(attempt_predictions_kable, digits = 3)
+
+# Plot cycle-level probabilities per age
+ggplot(attempt_predictions, aes(x = age, y = predicted_p, color = factor(attempt_num))) +
+  geom_smooth(linewidth = 1, se = FALSE) +
+  geom_point(size = 2, alpha = 0.7) +
+  scale_color_manual(
+    values = c("1" = "purple", "2" = "navy", "3" = "darkgreen"),
+    name = "Cycle"
+  ) +
+  scale_x_continuous(
+    limits = c(22, 48),
+    breaks = seq(22, 48, by = 2),
+    minor_breaks = seq(22, 48, by = 1)
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    breaks = seq(0, 1, by = 0.1),
+    minor_breaks = seq(0, 1, by = 0.05),
+    labels = scales::percent_format(accuracy = 1)
+  ) +
   labs(
-    title = "Mean Predicted Probability by Attempt Number",
-    x = "Attempt Number",
-    y = "Predicted Probability",
-    color = "Age Group"
+    title = "Predicted Probability of Pregnancy by Age and Cycle",
+    subtitle = "Model-adjusted probabilities averaged over AFC and AMH distribution",
+    x = "Age",
+    y = "Probability of Pregnancy"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12, color = "gray40"),
+    axis.title = element_text(face = "bold"),
+    legend.position = "top",
+    legend.title = element_text(face = "bold"),
+    panel.grid.minor = element_line(color = "gray90", linewidth = 0.3)
   )
 
-attempt_predictions %>% readr::write_csv("outputs/attempt_probabilities_by_age_long.csv")
+attempt_predictions %>%
+  write_csv("outputs/attempt_probabilities_by_age_long.csv")
 
-attempt_predictions_wide <- attempt_predictions %>% 
-  tidyr::pivot_wider(names_from = attempt_num, values_from = predicted_p_mean)
+attempt_predictions_wide <- attempt_predictions_kable %>%
+  select(c("age_display", "attempt_num", "predicted_p")) %>%
+  pivot_wider(
+    names_from = attempt_num,
+    values_from = predicted_p,
+    names_prefix = "cycle_"
+  )
 
-attempt_predictions_wide %>% readr::write_csv("outputs/attempt_probabilities_by_age_wide.csv")
+attempt_predictions_wide %>%
+  write_csv("outputs/attempt_probabilities_by_age_wide.csv")
+
 ```
 
 ## Multi-cycle with Varying Probabilities
@@ -469,11 +565,11 @@ attempt_predictions_wide %>% readr::write_csv("outputs/attempt_probabilities_by_
 ```{r}
 # Use p1, p2, p3 instead of assuming constant probability
 
-multi_cycle_dynamic <- attempt_predictions %>%
-  group_by(age_group) %>%
+multi_cycle_dynamic <- attempt_predictions_kable %>%
+  group_by(age_display) %>%
   summarize(
-    success_prob = 1 - prod(1 - predicted_p_mean),
-    failure_prob = prod(1 - predicted_p_mean)
+    success_prob = 1 - prod(1 - predicted_p),
+    failure_prob = prod(1 - predicted_p)
 )
 
 multi_cycle_dynamic |> 
@@ -487,16 +583,30 @@ multi_cycle_dynamic |>
 
 # First aggregate to patient level
 patient_summary <- m1df %>%
-  group_by(pat_id, age, age_group, amh) %>%
+  dplyr::mutate(
+    # AMH bins
+    amh_bin = case_when(
+      amh < 0.5 ~ "Very low",
+      amh >= 0.5 & amh < 1.0 ~ "Low",
+      amh >= 1.0 & amh <= 3.0 ~ "Normal",
+      amh > 3.0 ~ "High"
+    ),
+    amh_bin = factor(amh_bin, levels = c("Very low", "Low", "Normal", "High"))) |> 
+  group_by(pat_id, age, age_group, amh_bin, afc) %>%
   summarize(
     attempts = n(),
     successes = as.integer(sum(pregnant)),
     .groups = "drop"
 )
 
+print(paste0("Dropping rows from patient_summary table that have NA in any predictor variable; row count drops from ",nrow(patient_summary), " to ",nrow(drop_na(patient_summary))))
+
+patient_summary = patient_summary |> 
+  drop_na()
+
 # table(patient_summary$age) |> knitr::kable()
 
-binom_mod = run_binomial_model_with_various_distributions(patient_summary, formula = "cbind(successes, attempts - successes) ~ age") |> 
+binom_mod = run_binomial_model_with_various_distributions(patient_summary, formula = "cbind(successes, attempts - successes) ~ age + amh_bin + afc") |> 
   suppressMessages()
 
 print("Here is the full model validation output:")
@@ -608,14 +718,14 @@ p1_df %>%
   )
 ```
 
-### Simulated Probabilities averaged by Age Group
+### Simulated Probabilities averaged by Age
 ```{r}
 pregnancy_sim_results |> 
-  dplyr::group_by(age_group) |> 
+  dplyr::group_by(age) |> 
   dplyr::reframe(
     pct_achieve_pregnancy_sim = mean(achieve_pregnancy_sim, na.rm = TRUE)
   ) |> 
-  dplyr::arrange(age_group) |> 
+  dplyr::arrange(age) |> 
   knitr::kable()
 ```
 
@@ -638,7 +748,7 @@ egg_df = readr::read_rds("data/clean_data/cleaned_egg_level_df.rds")
 
 # Zoom in on relevant rows, drop rows with no info for age and attempt.
 egg_df = egg_df |> 
-  dplyr::select(pat_id, egg_id, age, attempt, pgd_clinresult, frozen_embryo, frozen_egg) |> 
+  dplyr::select(pat_id, egg_id, age, attempt, pgd_clinresult, frozen_embryo, frozen_egg, afc_other, afc_first_baseline, amh, amh_start) |> 
   dplyr::filter(!is.na(age))
 
 # Calculate age_group
@@ -687,23 +797,40 @@ n_sim <- 5000 # Monte Carlo iterations
 # 1. EUPLOID EMBRYO MODEL (BINOMIAL)
 ############################################################
 
+# We'll need to join AFC and AMH from cycle-level table to egg table.
+
 # Aggregate structured egg table to patient-level counts
 euploid_summary <- egg_df |>
   dplyr::filter(!frozen_egg) |>
   dplyr::mutate(
     success = pgd_clinresult %in% c("Euploid", "Normal") & !is.na(pgd_clinresult)
   ) |>
-  dplyr::group_by(pat_id) |>
+  dplyr::mutate(
+    # AMH bins
+    amh_bin = case_when(
+      amh < 0.5 ~ "Very low",
+      amh >= 0.5 & amh < 1.0 ~ "Low",
+      amh >= 1.0 & amh <= 3.0 ~ "Normal",
+      amh > 3.0 ~ "High"
+    ),
+    amh_bin = factor(amh_bin, levels = c("Very low", "Low", "Normal", "High"))) |> 
+  dplyr::group_by(pat_id, amh_bin) |>
   dplyr::reframe(
     successes = sum(success),
     number_of_eggs_attempted = dplyr::n(),
-    age = median(age, na.rm = TRUE),
-    age_group = dplyr::first(age_group)
+    age = min(age, na.rm = TRUE),
+    age_group = dplyr::first(age_group),
+    afc = mean(afc_first_baseline,na.rm=T)
   )
+
+print(paste0("Dropping rows from euploid_summary table that have NA in any predictor variable; row count drops from ",nrow(euploid_summary), " to ",nrow(drop_na(euploid_summary))))
+
+euploid_summary = euploid_summary |> 
+  drop_na()
 
 # Fit binomial model for per-egg euploid probability as a function of age
 euploid_binom_model <- glm(
-  cbind(successes, number_of_eggs_attempted - successes) ~ age,
+  cbind(successes, number_of_eggs_attempted - successes) ~ age + afc + amh_bin,
   family = quasibinomial,
   data = euploid_summary
 )
@@ -749,14 +876,14 @@ euploid_sim_results |>
   DT::datatable()
 ```
 
-### Simulated Probabilities averaged by Age Group
+### Simulated Probabilities averaged by Age
 ```{r}
 euploid_sim_results |> 
-  dplyr::group_by(age_group) |> 
+  dplyr::group_by(age) |> 
   dplyr::reframe(
     pct_1_plus_euploid_sim = mean(ge1_euploid_sim, na.rm = TRUE)
   ) |> 
-  dplyr::arrange(age_group) |> 
+  dplyr::arrange(age) |> 
   knitr::kable()
 ```
 
@@ -869,7 +996,7 @@ euploid_sim_results |>
 
 ```
 
-### Simulated Probabilities averaged by Age Group with Primary Inf Diagnosis
+### Simulated Probabilities averaged by Age with Primary Inf Diagnosis
 ```{r}
 euploid_sim_results |> 
   dplyr::group_by(primary_infertility_diagnosis_cl,age_group) |> 
@@ -975,15 +1102,15 @@ p3_df |>
   theme_minimal()
 ```
 
-### Simulated Probabilities averaged by Age Group
+### Simulated Probabilities averaged by Age
 ```{r}
 s_egg_sim_results %>%
-  group_by(age_group) %>%
+  group_by(age) %>%
   summarise(
     prob_success = mean(success_sim, na.rm = TRUE),
     .groups = "drop"
   ) %>%
-  arrange(age_group) %>%
+  arrange(age) %>%
   knitr::kable()
 ```
 
@@ -1060,7 +1187,7 @@ s_egg_sim_results |>
 
 ```
 
-### Simulated Probabilities averaged by Age Group with Primary Inf Diagnosis
+### Simulated Probabilities averaged by Age with Primary Inf Diagnosis
 ```{r}
 s_egg_sim_results |> 
   dplyr::group_by(primary_infertility_diagnosis_cl,age_group) |> 
@@ -1170,15 +1297,15 @@ p4_df |>
   theme_minimal()
 ```
 
-### Simulated Probabilities averaged by Age Group
+### Simulated Probabilities averaged by Age
 ```{r}
 df_multiple_sim_results %>%
-  group_by(age_group) %>%
+  group_by(age) %>%
   summarise(
     prob_fifteen_eggs_or_more_sim = mean(success_sim, na.rm = TRUE),
     .groups = "drop"
   ) %>%
-  arrange(age_group) %>%
+  arrange(age) %>%
   knitr::kable()
 ```
 
@@ -1270,7 +1397,7 @@ df_multiple_sim_results |>
 
 ```
 
-### Simulated Probabilities averaged by Age Group with Primary Inf Diagnosis
+### Simulated Probabilities averaged by Age with Primary Inf Diagnosis
 ```{r}
 df_multiple_sim_results |> 
   dplyr::group_by(primary_infertility_diagnosis_cl,age_group) |> 

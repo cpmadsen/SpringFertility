@@ -131,6 +131,85 @@ run_simulation <- function(p_vec, cost, payout, n_sim) {
   })
 }
 
+check_dispersion <- function(model) {
+  residual_dev <- deviance(model)
+  df_resid <- df.residual(model)
+  dispersion <- residual_dev / df_resid
+  return(dispersion)
+}
+# check_dispersion <- function(model) {
+#   sum(residuals(model, type = "pearson")^2) / df.residual(model)
+# }
+
+brier_score <- function(actual, predicted) {
+  mean((predicted - actual)^2)
+}
+
+calibration_table <- function(actual, predicted) {
+  data.frame(actual, predicted) %>%
+    mutate(bin = ntile(predicted, 10)) %>%
+    group_by(bin) %>%
+    summarize(
+      pred_mean = mean(predicted),
+      actual_mean = mean(actual),
+      abs_error = abs(pred_mean - actual_mean),
+      n = n(), # sample size per bin (important for stability)
+      .groups = "drop"
+    )
+}
+
+# Single Cycle Egg (Tiered)
+payout_egg_single <- function(eggs) {
+  ifelse(eggs <= 2, 0.5,
+         ifelse(eggs <= 4, 0.25,
+                0))
+}
+
+# Multi-Cycle Egg
+payout_egg_multi <- function(total_eggs) {
+  ifelse(total_eggs < 10, 0.5,
+         ifelse(total_eggs < 15, 0.25,
+                0))
+}
+
+# Euploid Embryo
+payout_euploid <- function(has_euploid) {
+  ifelse(has_euploid == 0, 1.0, 0)
+}
+
+# Live Birth
+payout_livebirth <- function(live_birth) {
+  ifelse(live_birth == 0, 1.0, 0)
+}
+
+simulate_eggs <- function(newdata, n = 2000) {
+  mu <- predict(egg_model, newdata, type = "response")
+  theta <- 5
+  rnbinom(n, mu = mu, size = theta)
+}
+
+get_thresholds_1cycle <- function(newdata) {
+  sims <- simulate_eggs(newdata)
+  c(
+    threshold_90 = quantile(sims, 0.10),
+    threshold_95 = quantile(sims, 0.05)
+  )
+}
+
+simulate_eggs2 <- function(newdata, n = 2000) {
+  mu <- predict(egg2_model, newdata, type = "response")
+  theta <- 5
+  rnbinom(n, mu = mu, size = theta)
+}
+
+get_thresholds_2cycle <- function(newdata) {
+  sims <- simulate_eggs2(newdata)
+  c(
+    threshold_90 = quantile(sims, 0.10),
+    threshold_95 = quantile(sims, 0.05)
+  )
+}
+
 # ############################################################
 # # FUNCTION: FINAL PRICING
 # ############################################################
@@ -150,3 +229,93 @@ run_simulation <- function(p_vec, cost, payout, n_sim) {
 #     premium = premium
 #   ))
 # }
+
+get_metrics <- function(model, data, outcome_name) {
+  
+  probs <- predict(model, newdata = data, type = "response")
+  # dispersion = check_dispersion(model)
+  auc <- pROC::roc(data[[outcome_name]], probs)$auc
+  brier <- mean((probs - data[[outcome_name]])^2)
+  
+  cal_model <- glm(data[[outcome_name]] ~ probs, family = binomial)
+  
+  c(
+    AUC = as.numeric(auc),
+    Brier = brier,
+    Cal_Intercept = coef(cal_model)[1],
+    Cal_Slope = coef(cal_model)[2]
+  )
+}
+
+cv_evaluate <- function(formula, data, outcome_name, family, k = 5) {
+  
+  folds <- caret::createFolds(data[[outcome_name]], k = k)
+  results <- data.frame()
+  
+  for (i in seq_along(folds)) {
+    test_idx <- folds[[i]]
+    train <- data[-test_idx, ]
+    test  <- data[test_idx, ]
+    
+    model <- glm(formula, data = train, family = family)
+    probs <- predict(model, newdata = test, type = "response")
+    
+    auc <- tryCatch(
+      pROC::roc(test[[outcome_name]], probs)$auc,
+      error = function(e) NA
+    )
+    
+    brier <- mean((probs - test[[outcome_name]])^2)
+    
+    results <- rbind(results, data.frame(AUC = auc, Brier = brier))
+  }
+  
+  results
+}
+
+estimate_prob_success <- function(data, sim_fun, threshold_col, n_sim = 1000) {
+  purrr::map_dbl(seq_len(nrow(data)), function(i) {
+    sims <- sim_fun(data[i, ], n = n_sim)
+    mean(sims >= data[[threshold_col]][i])
+  })
+}
+
+get_metrics_from_probs <- function(observed, predicted) {
+  
+  # Remove NA pairs
+  df <- data.frame(observed = observed, predicted = predicted) |>
+    dplyr::filter(!is.na(observed), !is.na(predicted))
+  
+  observed <- df$observed
+  predicted <- df$predicted
+  
+  # --- AUC ---
+  roc_obj <- pROC::roc(observed, predicted, quiet = TRUE)
+  auc_val <- as.numeric(pROC::auc(roc_obj))
+  
+  # --- Brier Score ---
+  brier <- mean((predicted - observed)^2)
+  
+  # --- Calibration slope ---
+  # Logistic regression of observed outcome on logit(predicted)
+  eps <- 1e-6
+  pred_clipped <- pmin(pmax(predicted, eps), 1 - eps)
+  logit_pred <- log(pred_clipped / (1 - pred_clipped))
+  
+  cal_model <- glm(observed ~ logit_pred, family = binomial)
+  cal_slope <- coef(cal_model)["logit_pred"]
+  
+  # --- AIC (optional, from calibration model) ---
+  aic_val <- AIC(cal_model)
+  
+  # Disperson
+  # dispersion = check_dispersion(cal_model)
+  
+  return(c(
+    AUC = auc_val,
+    Brier = brier,
+    Cal_Slope = cal_slope,
+    AIC = aic_val#,
+    # Dispersion = dispersion
+  ))
+}
