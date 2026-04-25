@@ -62,114 +62,40 @@ admin_load <- 0.10
 # These should NOT be hardcoded in production — they should be inputs.
 
 ############################################################
-# 2. PRICING FUNCTION
+# 2a. PRICING FUNCTION: EUPLOID
 ############################################################
 
-pricing_outputs <- pricing_inputs |>
+euploid_pricing_outputs <- euploid_probs |>
   dplyr::mutate(
-    cumulative_failure_prob = failure_3,
-    cumulative_success_prob = cycle_3,
-    expected_cycles = 1 + failure_1 + failure_2,
+    cumulative_failure_prob = three_cycles_fail,
+    cumulative_success_prob = three_cycles_scs,
+    expected_cycles = 1 + one_cycle_fail + two_cycles_fail,
     
     expected_treatment_cost = expected_cycles * cost_per_cycle,
     expected_payout_cost = cumulative_failure_prob * payout_euploid * refund_percent,
     total_expected_cost = expected_treatment_cost + expected_payout_cost,
     premium = total_expected_cost * (1 + risk_margin + admin_load)
   )
-
+  
 
 ############################################################
-# 4. CORE PRICING FUNCTION
+# 2b. PRICING FUNCTION: LIVE BIRTHS
 ############################################################
 
-price_product <- function(p_failure,
-                          expected_cycles,
-                          cost_per_cycle,
-                          payout_amount,
-                          refund_percent,
-                          risk_margin,
-                          admin_load) {
-  
-  ##########################################################
-  # COST COMPONENTS
-  ##########################################################
-  
-  expected_treatment_cost <- expected_cycles * cost_per_cycle
-  
-  expected_payout_cost <- p_failure * payout_amount * refund_percent
-  
-  total_expected_cost <- expected_treatment_cost + expected_payout_cost
-  
-  ##########################################################
-  # FINAL PREMIUM
-  ##########################################################
-  
-  premium <- total_expected_cost * (1 + risk_margin + admin_load)
-  
-  return(data.frame(
-    failure_prob = round(p_failure, 3),
-    expected_cycles = round(expected_cycles, 2),
-    expected_treatment_cost = round(expected_treatment_cost, 0),
-    expected_payout_cost = round(expected_payout_cost, 0),
-    premium = round(premium, 0)
-  ))
-}
-
+live_birth_pricing_outputs <- livebirth_probs |>
+  dplyr::mutate(
+    cumulative_failure_prob = three_cycles_fail,
+    cumulative_success_prob = three_cycles_scs,
+    expected_cycles = 1 + one_cycle_fail + two_cycles_fail,
+    
+    expected_treatment_cost = expected_cycles * cost_per_cycle,
+    expected_payout_cost = cumulative_failure_prob * payout_live_birth * refund_percent,
+    total_expected_cost = expected_treatment_cost + expected_payout_cost,
+    premium = total_expected_cost * (1 + risk_margin + admin_load)
+  )
 
 ############################################################
-# 5. LIVE BIRTH MODEL (MULTI-CYCLE)
-############################################################
-
-# !! NOTE !!: Replace with model-generated probabilities
-p_vec_live_birth <- c(
-  p_live_birth_cycle1,
-  p_live_birth_cycle2,
-  p_live_birth_cycle3
-)
-
-multi_lb <- compute_multi_cycle(p_vec_live_birth)
-
-expected_cycles_lb <- expected_cycles_used(p_vec_live_birth)
-
-pricing_live_birth <- price_product(
-  p_failure = multi_lb$failure,
-  expected_cycles = expected_cycles_lb,
-  cost_per_cycle = cost_per_cycle,
-  payout_amount = payout_live_birth,
-  refund_percent = refund_percent,
-  risk_margin = risk_margin,
-  admin_load = admin_load
-)
-
-
-############################################################
-# 6. EUPLOID MODEL (MULTI-CYCLE)
-############################################################
-
-# !! NOTE !!: Replace with model-generated probabilities
-p_vec_euploid <- c(
-  euploid_probs$cycle_1,
-  euploid_probs$cycle_2,
-  euploid_probs$cycle_3
-)
-
-multi_eu <- compute_multi_cycle(p_vec_euploid)
-
-expected_cycles_eu <- expected_cycles_used(p_vec_euploid)
-
-pricing_euploid <- price_product(
-  p_failure = multi_eu$failure,
-  expected_cycles = expected_cycles_eu,
-  cost_per_cycle = cost_per_cycle,
-  payout_amount = payout_euploid,
-  refund_percent = refund_percent,
-  risk_margin = risk_margin,
-  admin_load = admin_load
-)
-
-
-############################################################
-# 7. EGG MODEL — 1 CYCLE (MONTE CARLO)
+# 3. EGG MODEL — 1 CYCLE (MONTE CARLO)
 ############################################################
 
 # !! NOTE !!: Monte Carlo simulation output
@@ -210,7 +136,7 @@ pricing_egg_95 <- price_product(
 
 
 ############################################################
-# 8. EGG MODEL — 2 CYCLES (MONTE CARLO + POOLING)
+# 4. EGG MODEL — 2 CYCLES (MONTE CARLO + POOLING)
 ############################################################
 
 # !! NOTE !!: Ensure cycle 1 information is included in simulation
@@ -265,71 +191,3 @@ final_pricing <- rbind(
 
 print(final_pricing)
 
-
-
-# From Lara originally:
-
-
-############################################################
-# 2. MULTI-CYCLE POOLING FUNCTION
-############################################################
-# Converts per-cycle probabilities into pooled risk
-# 
-# compute_multi_cycle <- function(p_vec) {
-#   
-#   success_prob <- 1 - prod(1 - p_vec)
-#   failure_prob <- prod(1 - p_vec)
-#   
-#   return(list(
-#     success = success_prob,
-#     failure = failure_prob
-#   ))
-# }
-
-
-############################################################
-# 3. EXPECTED CYCLES USED (IMPORTANT FOR COST)
-############################################################
-
-# expected_cycles_used <- function(p_vec) {
-#   
-#   N <- length(p_vec)
-#   
-#   prob_success_each <- numeric(N)
-#   
-#   for (i in 1:N) {
-#     if (i == 1) {
-#       prob_success_each[i] <- p_vec[i]
-# #     } else {
-# #       prob_success_each[i] <- prod(1 - p_vec[1:(i-1)]) * p_vec[i]
-# #     }
-# #   }
-# #   
-# #   failure_prob <- prod(1 - p_vec)
-# #   
-# #   expected_cycles <- sum((1:N) * prob_success_each) +
-# #     N * failure_prob
-# #   
-# #   return(expected_cycles)
-# # }
-# 
-# # This version assumes cumulative probs in input
-# expected_cycles_used_cumulative <- function(p_cum_vec) {
-#   
-#   N <- length(p_cum_vec)
-#   
-#   # Probability of first success in each cycle
-#   prob_success_each <- c(
-#     p_cum_vec[1],
-#     diff(p_cum_vec)
-#   )
-#   
-#   # Probability of no success by final covered cycle
-#   failure_prob <- 1 - p_cum_vec[N]
-#   
-#   expected_cycles <- sum((1:N) * prob_success_each) +
-#     N * failure_prob
-#   
-#   return(expected_cycles)
-# }
-# 
