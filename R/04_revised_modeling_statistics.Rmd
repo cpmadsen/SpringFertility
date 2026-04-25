@@ -322,7 +322,7 @@ livebirth_multi_cycle = m1df_eup |>
 livebirth_multi_cycle |> 
   DT::datatable()
 
-readr::write_csv(livebirth_multi_cycle, "livebirth_multicycle_probabilities.csv")
+readr::write_csv(livebirth_multi_cycle, "outputs/livebirth_multicycle_probabilities.csv")
 
 ```
 
@@ -381,7 +381,7 @@ euploid_multi_cycle = m1df |>
 euploid_multi_cycle |> 
   DT::datatable()
 
-readr::write_csv(euploid_multi_cycle, "euploid_embryo_multicycle_probabilities.csv")
+readr::write_csv(euploid_multi_cycle, "outputs/euploid_embryo_multicycle_probabilities.csv")
 
 ```
 
