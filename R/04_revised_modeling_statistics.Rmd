@@ -311,12 +311,12 @@ livebirth_multi_cycle = m1df_eup |>
     p1 = first(pred_live_birth)
   ) |>
   dplyr::mutate(
-    cycle_1 = 1 - (1 - p1)^1,
-    cycle_2 = 1 - (1 - p1)^2,
-    cycle_3 = 1 - (1 - p1)^3,
-    failure_1 = (1 - p1)^1,
-    failure_2 = (1 - p1)^2,
-    failure_3 = (1 - p1)^3
+    one_cycle_scs = 1 - (1 - p1)^1,
+    two_cycles_scs = 1 - (1 - p1)^2,
+    three_cycles_scs = 1 - (1 - p1)^3,
+    one_cycle_fail = (1 - p1)^1,
+    two_cycles_fail = (1 - p1)^2,
+    three_cycles_fail = (1 - p1)^3
   )
 
 livebirth_multi_cycle |> 
@@ -370,12 +370,12 @@ euploid_multi_cycle = m1df |>
     p1 = first(pred_euploid)
   ) |>
   dplyr::mutate(
-    cycle_1 = 1 - (1 - p1)^1,
-    cycle_2 = 1 - (1 - p1)^2,
-    cycle_3 = 1 - (1 - p1)^3,
-    failure_1 = (1 - p1)^1,
-    failure_2 = (1 - p1)^2,
-    failure_3 = (1 - p1)^3
+    one_cycle_scs = 1 - (1 - p1)^1,
+    two_cycles_scs = 1 - (1 - p1)^2,
+    three_cycles_scs = 1 - (1 - p1)^3,
+    one_cycle_fail = (1 - p1)^1,
+    two_cycles_fail = (1 - p1)^2,
+    three_cycles_fail = (1 - p1)^3
   )
 
 euploid_multi_cycle |> 
