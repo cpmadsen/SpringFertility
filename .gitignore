@@ -9,3 +9,4 @@ data/*
 outputs/*
 *.html
 .RData*
+*.csv

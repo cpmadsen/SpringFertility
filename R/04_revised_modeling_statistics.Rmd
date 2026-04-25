@@ -199,7 +199,11 @@ euploid_embryos_from_egg_df = egg_df |>
 
 m1df = df |>
   dplyr::left_join(euploid_embryos_from_egg_df) |> 
-  dplyr::select(euploid_success, age, afc, amh, birth_bool) |> 
+  dplyr::arrange(pat_id, treatment_start_date) |> 
+  dplyr::group_by(pat_id) |> 
+  dplyr::mutate(cycle_number = dplyr::row_number()) |> 
+  dplyr::ungroup() |> 
+  dplyr::select(pat_id, euploid_success, age, afc, amh, birth_bool, cycle_number, treatment_start_date) |> 
   tidyr::drop_na()
 
   # dplyr::filter(treatment == 'ICSI')
@@ -298,6 +302,30 @@ n_sim <- 5000 # Monte Carlo iterations
 
 ```
 
+### Multi-cycle (Cumulative) Probabilities
+```{r}
+# --- Closed-form cumulative probability (Live Birth) ---
+livebirth_multi_cycle = m1df_eup |> 
+ dplyr::group_by(pat_id) |>
+  dplyr::summarise(
+    p1 = first(pred_live_birth)
+  ) |>
+  dplyr::mutate(
+    cycle_1 = 1 - (1 - p1)^1,
+    cycle_2 = 1 - (1 - p1)^2,
+    cycle_3 = 1 - (1 - p1)^3,
+    failure_1 = (1 - p1)^1,
+    failure_2 = (1 - p1)^2,
+    failure_3 = (1 - p1)^3
+  )
+
+livebirth_multi_cycle |> 
+  DT::datatable()
+
+readr::write_csv(livebirth_multi_cycle, "livebirth_multicycle_probabilities.csv")
+
+```
+
 ### Simulated Probabilities averaged by Age
 ```{r}
 livebirth_sim_results |> 
@@ -333,6 +361,30 @@ euploid_sim_results |>
   knitr::kable()
 ```
 
+### Multi-cycle (Cumulative) Probabilities
+```{r}
+# --- Closed-form cumulative probability (Live Birth) ---
+euploid_multi_cycle = m1df |> 
+ dplyr::group_by(pat_id) |>
+  dplyr::summarise(
+    p1 = first(pred_euploid)
+  ) |>
+  dplyr::mutate(
+    cycle_1 = 1 - (1 - p1)^1,
+    cycle_2 = 1 - (1 - p1)^2,
+    cycle_3 = 1 - (1 - p1)^3,
+    failure_1 = (1 - p1)^1,
+    failure_2 = (1 - p1)^2,
+    failure_3 = (1 - p1)^3
+  )
+
+euploid_multi_cycle |> 
+  DT::datatable()
+
+readr::write_csv(euploid_multi_cycle, "euploid_embryo_multicycle_probabilities.csv")
+
+```
+
 ### Simulated Probabilities averaged by Age
 ```{r}
 euploid_sim_results |> 
@@ -342,45 +394,6 @@ euploid_sim_results |>
   ) |> 
   dplyr::arrange(age) |> 
   knitr::kable()
-```
-
-```{r}
-# ### Plot of simulated payout
-# payout_amount <- 22000
-# 
-# eup_df <- euploid_sim_results %>%
-#   mutate(
-#     pred_fail_p = 1 - pred_euploid,
-#     pred_payout = pred_fail_p * payout_amount
-#   ) %>%
-#   group_by(age) %>%
-#   summarise(
-#     mean_pred_payout = mean(pred_payout, na.rm = TRUE),
-#     sd_pred_payout = sd(pred_payout, na.rm = TRUE),
-#     number_patients = n(),
-#     .groups = "drop"
-#   )
-# 
-# eup_df %>%
-#   ggplot(aes(x = age, y = mean_pred_payout)) +
-#   geom_smooth(linewidth = 1, color = "#2C7FB8") +
-#   geom_point(size = 2.5, color = "#2C7FB8", alpha = 0.8) +
-#   labs(
-#     title = "Expected Insurance Payout by Age",
-#     subtitle = "Euploid Embryo Model",
-#     x = "Age (years)",
-#     y = "Average Predicted Payout ($)"
-#   ) +
-#   scale_y_continuous(labels = scales::dollar_format()) +
-#   scale_x_continuous(limits = c(30, 42), breaks = 30:42) +
-#   theme_minimal(base_size = 13) +
-#   theme(
-#     plot.title = element_text(face = "bold", size = 16),
-#     plot.subtitle = element_text(size = 12, color = "gray40"),
-#     axis.title = element_text(face = "bold"),
-#     axis.text = element_text(color = "gray20"),
-#     panel.grid.minor = element_blank()
-#   )
 ```
 
 # Egg Actuarial Models (Beta-binomial / Binomial + Monte-Carlo Simulation) {.tabset}
@@ -1010,118 +1023,4 @@ plot_egg_distribution <- function(newdata) {
 # Run it
 plot_egg_distribution(new_patient)
 
-```
-
-```{r}
-# ### Plot Predicted payouts
-# 
-# p4_df = df_multiple |> 
-#   dplyr::mutate(pred_fail_p = 1 - pred_p) |> 
-#   dplyr::mutate(pred_payout = pred_fail_p * 20000) |>  # Arbitrary amount of payout!
-#   dplyr::group_by(age, amh) |> 
-#   dplyr::reframe(mean_pred_payout = mean(pred_payout, na.rm=T))
-# 
-# p4_df |> 
-#   ggplot(aes(x = age, y = mean_pred_payout)) +
-#   geom_line(aes(col = amh)) +
-#   # geom_smooth(aes(group = amh_bin, colour = amh_bin), method = 'lm') +
-#   geom_point(aes(colour = amh)) + 
-#   # facet_wrap( ~ amh_bin, ncol = 1) +
-#   labs(y = "Total Simulated Payout by Age", colour = 'AMH bin', x = "Age") +
-#   scale_y_continuous(labels = scales::dollar) +
-#   scale_x_continuous(limits = c(30,42)) + 
-#   theme_minimal()
-```
-
-```{r}
-# ### Simulated Probabilities averaged by Age
-# 
-# df_multiple_sim_results %>%
-#   group_by(age) %>%
-#   summarise(
-#     prob_fifteen_eggs_or_more_sim = mean(success_sim, na.rm = TRUE),
-#     .groups = "drop"
-#   ) %>%
-#   arrange(age) %>%
-#   knitr::kable()
-```
-
-```{r}
-# # Pricing Outputs
-# calc_pricing <- function(expected_payout_vec, model_name) {
-#   tibble::tibble(
-#     model = model_name,
-#     expected_cost = mean(expected_payout_vec, na.rm = TRUE),
-#     var_95 = quantile(expected_payout_vec, 0.95, na.rm = TRUE),
-#     premium = expected_cost * (1 + risk_margin + admin_load)
-#   )
-# }
-# 
-# # Use the same payout amount consistently
-# payout_amount <- 22000
-# 
-# # 1. Clinical pregnancy model
-# live_birth_costs <- live_birth_sim_results %>%
-#   mutate(
-#     pred_fail_p = 1 - pred_p,
-#     expected_payout = pred_fail_p * payout_amount
-#   )
-# 
-# live_birth_results <- calc_pricing(
-#   expected_payout_vec = live_birth_costs$expected_payout,
-#   model_name = "Live-birth Model"
-# )
-# 
-# # 2. Euploid embryo model
-# euploid_costs <- euploid_sim_results %>%
-#   mutate(
-#     pred_fail_p = 1 - prob_ge1_euploid,
-#     expected_payout = pred_fail_p * payout_amount
-#   )
-# 
-# euploid_results <- calc_pricing(
-#   expected_payout_vec = euploid_costs$expected_payout,
-#   model_name = "Euploid Embryo"
-# )
-# 
-# # 3. Single-cycle egg model
-# s_egg_costs <- single_cycle_egg_df %>%
-#   mutate(
-#     pred_fail_p = 1 - pred_p,
-#     expected_payout = pred_fail_p * payout_amount
-#   )
-# 
-# egg_results <- calc_pricing(
-#   expected_payout_vec = s_egg_costs$expected_payout,
-#   model_name = "Single-Cycle Egg"
-# )
-# 
-# # 4. Two-cycle egg model
-# two_egg_costs <- df_multiple %>%
-#   mutate(
-#     pred_fail_p = 1 - pred_p,
-#     expected_payout = pred_fail_p * payout_amount
-#   )
-# 
-# two_results <- calc_pricing(
-#   expected_payout_vec = two_egg_costs$expected_payout,
-#   model_name = "Two-Cycle Egg"
-# )
-```
-
-```{r}
-# # Final Comparison
-# final_results <- bind_rows(
-#   live_birth_results,
-#   euploid_results,
-#   egg_results,
-#   two_results
-# ) %>%
-#   mutate(
-#     expected_cost = scales::dollar(expected_cost),
-#     var_95 = scales::dollar(var_95),
-#     premium = scales::dollar(premium)
-#   )
-# 
-# knitr::kable(final_results)
 ```
