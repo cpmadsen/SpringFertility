@@ -239,11 +239,14 @@ get_metrics <- function(model, data, outcome_name) {
   
   cal_model <- glm(data[[outcome_name]] ~ probs, family = binomial)
   
+  aic_val <- AIC(cal_model)
+  
   c(
     AUC = as.numeric(auc),
     Brier = brier,
     Cal_Intercept = coef(cal_model)[1],
-    Cal_Slope = coef(cal_model)[2]
+    Cal_Slope = coef(cal_model)[2],
+    AIC = aic_val
   )
 }
 
@@ -296,14 +299,27 @@ get_metrics_from_probs <- function(observed, predicted) {
   # --- Brier Score ---
   brier <- mean((predicted - observed)^2)
   
-  # --- Calibration slope ---
-  # Logistic regression of observed outcome on logit(predicted)
-  eps <- 1e-6
-  pred_clipped <- pmin(pmax(predicted, eps), 1 - eps)
-  logit_pred <- log(pred_clipped / (1 - pred_clipped))
+  # ==================================== #
+  # Revised version of calibration slope #
+  # Numerical stability
+  probs <- pmin(pmax(predicted, 1e-6), 1 - 1e-6)
   
-  cal_model <- glm(observed ~ logit_pred, family = binomial)
-  cal_slope <- coef(cal_model)["logit_pred"]
+  # auc <- pROC::roc(data[[outcome_name]], probs)$auc
+  # brier <- mean((probs - data[[outcome_name]])^2)
+  
+  #Updated calibration slope
+  logit_p <- log(probs / (1 - probs))
+  
+  cal_model <- glm(observed ~ logit_p, family = binomial)
+  
+  # # --- Calibration slope ---
+  # # Logistic regression of observed outcome on logit(predicted)
+  # eps <- 1e-6
+  # pred_clipped <- pmin(pmax(predicted, eps), 1 - eps)
+  # logit_pred <- log(pred_clipped / (1 - pred_clipped))
+  # 
+  # cal_model <- glm(observed ~ logit_pred, family = binomial)
+  # cal_slope <- coef(cal_model)["logit_pred"]
   
   # --- AIC (optional, from calibration model) ---
   aic_val <- AIC(cal_model)
@@ -314,7 +330,9 @@ get_metrics_from_probs <- function(observed, predicted) {
   return(c(
     AUC = auc_val,
     Brier = brier,
-    Cal_Slope = cal_slope,
+    # Cal_Slope = cal_slope,
+    Cal_Intercept = coef(cal_model)[1],
+    Cal_Slope = coef(cal_model)[2],
     AIC = aic_val#,
     # Dispersion = dispersion
   ))

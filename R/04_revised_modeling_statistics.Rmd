@@ -766,10 +766,15 @@ model_results = model_specs |>
       predicted = sim_results$pred_prob
     )
     
+    # Egg models give slightly different column names in metrics; align these with the 
+    # other models
+    if('Cal_Slope.logit_p' %in% names(metrics)){
+      pos_to_change = which(names(metrics) == 'Cal_Slope.logit_p')
+      names(metrics)[pos_to_change] = 'Cal_Slope.probs'
+    }
+  
   } else if (is_binary) {
     metrics <- get_metrics(model, spec$data, spec$outcome)
-  } else {
-    metrics <- c(AIC = AIC(model))
   }
   
   cv <- if (is_binary) {
@@ -796,7 +801,8 @@ model_summary <- purrr::imap_dfr(model_results, function(res, name) {
       stringr::str_replace_all("\\*", " x "),
     AUC = res$metrics["AUC"] %||% NA,
     Brier = res$metrics["Brier"] %||% NA,
-    Cal_Slope = res$metrics["Cal_Slope"] %||% NA,
+    Cal_Intercept = res$metrics["Cal_Intercept.(Intercept)"] %||% NA,
+    Cal_Slope = res$metrics["Cal_Slope.probs"] %||% NA,
     CV_AUC_SD = res$cv_sd,
     AIC = res$metrics["AIC"] %||% NA,
     Dispersion = res$metrics["Dispersion"] %||% NA
