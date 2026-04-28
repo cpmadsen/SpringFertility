@@ -231,6 +231,33 @@ live_birth_model <- glm(
   data = m1df |> dplyr::filter(euploid_success)
 )
 
+############################################################
+# Export model coefficients for Excel pricing tool
+############################################################
+
+euploid_coef_export <- coef(euploid_model) |>
+  as.data.frame() |>
+  tibble::rownames_to_column("term") |>
+  dplyr::rename(estimate = 2) |>
+  dplyr::mutate(model = "euploid")
+
+readr::write_csv(
+  euploid_coef_export,
+  "outputs/euploid_model_coefficients.csv"
+)
+
+live_birth_coef_export <- coef(live_birth_model) |>
+  as.data.frame() |>
+  tibble::rownames_to_column("term") |>
+  dplyr::rename(estimate = 2) |>
+  dplyr::mutate(model = "live_birth_given_euploid")
+
+readr::write_csv(
+  live_birth_coef_export,
+  "outputs/live_birth_model_coefficients.csv"
+)
+
+m1df$pred_euploid <- predict(euploid_model, new_data = m1df, type = "response")
 m1df$pred_euploid <- predict(euploid_model, new_data = m1df, type = "response")
 
 m1df_eup = m1df |> 
