@@ -1,0 +1,743 @@
+---
+title: "Insurance Modeling Analysis"
+author: "Charm Economics"
+date: "`r Sys.Date()`"
+output: 
+  rmdformats::downcute
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+library(dplyr)
+library(ggplot2)
+library(VGAM)
+library(pROC)
+library(MASS)
+library(ResourceSelection)
+library(knitr)
+library(tidyr)
+library(readr)
+set.seed(123)
+```
+
+```{r define_functions}
+source(file.path(here::here(),"R/utils/modeling_stats_utility_functions.R"))
+source(file.path(here::here(),"R/utils/model_recalibration.R"))
+```
+
+```{r read_in_and_clean_cycle_data, include=F}
+df <- readr::read_rds("data/clean_data/cld_filtered.rds") |> 
+  dplyr::rename(pregnant = pregnant_bool)
+
+egg_df = readr::read_rds("data/clean_data/cleaned_egg_level_df.rds")
+
+# Number of unique PAT ids
+df = df |> dplyr::mutate(the_year = lubridate::year(treatment_start_date))
+```
+
+# Sections {.tabset}
+
+## Descriptive Statistics {.tabset}
+
+### Number of Unique Patients
+
+```{r}
+df |> 
+  dplyr::select(pat_id, age) |> 
+  dplyr::distinct() |> 
+  dplyr::count(age) |> 
+  knitr::kable()
+```
+
+### Age, AMH and AFC Distributions
+```{r}
+suppressWarnings(
+df |> 
+  dplyr::select(age, afc, amh) |> 
+  tidyr::pivot_longer(cols = dplyr::everything()) |> 
+  dplyr::mutate(name = factor(name, levels = c('age','afc','amh'))) |> 
+  ggplot(aes(value)) +
+  facet_wrap(~ name, scales = 'free', ncol = 1) +
+  geom_histogram(bins = 20) + 
+  scale_x_continuous(breaks = scales::breaks_pretty())
+)
+
+df |> 
+  dplyr::select(age, afc, amh) |> 
+  tidyr::pivot_longer(cols = dplyr::everything()) |> 
+  dplyr::group_by(name) |> 
+  dplyr::reframe(maximum = max(value,na.rm=T), minimum = min(value, na.rm=T), median = median(value, na.rm=T)) |> 
+  knitr::kable()
+```
+
+
+### Descriptive Pregnancy Rates
+```{r}
+pregnancy_rates <- df %>%
+  group_by(age) %>%
+  summarize(
+    cycles = n(),
+    pregnancies = sum(pregnant),
+    pregnancy_rate = pregnancies / cycles
+  )
+
+kable(pregnancy_rates, digits = 3)
+
+ggplot(pregnancy_rates, aes(x = age, y = pregnancy_rate)) +
+  geom_col() +
+  labs(
+    title = "Pregnancy Rate by Age Group",
+    x = "Age Group",
+    y = "Pregnancy Rate"
+  )
+```
+
+### Dataset Date Range
+```{r}
+df |> 
+  dplyr::reframe(earliest_date = min(treatment_start_date, na.rm=T),
+                 latest_date = max(treatment_start_date, na.rm=T)) |> 
+  knitr::kable()
+
+df |> 
+  dplyr::mutate(year = lubridate::year(treatment_start_date)) |> 
+  dplyr::count(year, name = 'unique patient/treatment cycle combinations')
+
+ggplot(df) + 
+  geom_histogram(aes(treatment_start_date)) + 
+  scale_x_date(date_breaks = 'year', date_labels = '%Y') +
+  theme_minimal()
+```
+
+### Key Variables
+```{r make_tbl_for_key_variables}
+var_summary <- df %>%
+  mutate(
+    total_2pn_eggs = num_2pn_from_fresh_eggs + num_2pn_from_frozen_eggs
+  ) %>%
+  group_by(age) %>%
+  summarise(
+    n_cycles = n(),
+    
+    # Euploid embryos
+    mean_euploid    = mean(num_euploid_blast, na.rm = TRUE),
+    iqr_euploid_l   = quantile(num_euploid_blast, 0.25, na.rm = TRUE),
+    iqr_euploid_u   = quantile(num_euploid_blast, 0.75, na.rm = TRUE),
+    pct_ge1_euploid = mean(coalesce(num_euploid_blast, 0) >= 1) * 100,
+    
+    # Eggs retrieved
+    mean_eggs       = mean(num_eggs_collected, na.rm = TRUE),
+    iqr_eggs_l      = quantile(num_eggs_collected, 0.25, na.rm = TRUE),
+    iqr_eggs_u      = quantile(num_eggs_collected, 0.75, na.rm = TRUE),
+    
+    # MII eggs
+    mean_m2         = mean(num_m2_eggs, na.rm = TRUE),
+    iqr_m2_l        = quantile(num_m2_eggs, 0.25, na.rm = TRUE),
+    iqr_m2_u        = quantile(num_m2_eggs, 0.75, na.rm = TRUE),
+    
+    # Fertilized (2PN)
+    mean_2pn        = mean(total_2pn_eggs, na.rm = TRUE),
+    iqr_2pn_l       = quantile(total_2pn_eggs, 0.25, na.rm = TRUE),
+    iqr_2pn_u       = quantile(total_2pn_eggs, 0.75, na.rm = TRUE),
+    
+    # AMH
+    mean_amh        = mean(amh, na.rm = TRUE),
+    iqr_amh_l       = quantile(amh, 0.25, na.rm = TRUE),
+    iqr_amh_u       = quantile(amh, 0.75, na.rm = TRUE),
+    
+    # AFC
+    mean_afc        = mean(afc, na.rm = TRUE),
+    iqr_afc_l       = quantile(afc, 0.25, na.rm = TRUE),
+    iqr_afc_u       = quantile(afc, 0.75, na.rm = TRUE),
+    
+    .groups = "drop"
+  )
+
+
+var_summary_fmt <- var_summary %>%
+  mutate(
+    eggs_fmt = sprintf("%.1f (%.1f–%.1f)", mean_eggs, iqr_eggs_l, iqr_eggs_u),
+    m2_fmt   = sprintf("%.1f (%.1f–%.1f)", mean_m2, iqr_m2_l, iqr_m2_u),
+    p2n_fmt  = sprintf("%.1f (%.1f–%.1f)", mean_2pn, iqr_2pn_l, iqr_2pn_u),
+    amh_fmt  = sprintf("%.2f (%.2f–%.2f)", mean_amh, iqr_amh_l, iqr_amh_u),
+    afc_fmt  = sprintf("%.1f (%.1f–%.1f)", mean_afc, iqr_afc_l, iqr_afc_u),
+    euploid_fmt = sprintf("%.1f (%.1f–%.1f)", mean_euploid, iqr_euploid_l, iqr_euploid_u),
+    euploid_pct = sprintf("%.1f%%", pct_ge1_euploid)
+  )
+
+var_summary_fmt |> 
+  knitr::kable()
+```
+
+## Removal of Patients over 43 years of age
+
+Just a flag to remind us that we have done this!
+
+```{r}
+df = df |> 
+  dplyr::filter(age <= 43)
+
+egg_df = egg_df |> 
+  dplyr::filter(age <= 43)
+```
+
+## Patient-level Statistical Models {.tabset}
+
+Two models here:
+
+Live birth model
+Euploid embryo model
+
+```{r make_model_1_dataset}
+
+# Note - models in this section include only treatments of type 'ICSI' (the majority of the treatments) and NOT those of type 'IVF'.
+
+euploid_embryos_from_egg_df = egg_df |> 
+  dplyr::select(pat_id,tx_id,tx_cycle,pgd_clinresult) |> 
+  dplyr::group_by(pat_id,tx_id) |> 
+  dplyr::reframe(euploid_success = sum(pgd_clinresult %in% c("Euploid", "Normal") & !is.na(pgd_clinresult)) > 0)
+
+m1df = df |>
+  dplyr::left_join(euploid_embryos_from_egg_df) |> 
+  dplyr::arrange(pat_id, treatment_start_date) |> 
+  dplyr::group_by(pat_id) |> 
+  dplyr::mutate(cycle_number = dplyr::row_number()) |> 
+  dplyr::ungroup() |> 
+  dplyr::select(pat_id, euploid_success, age, afc, amh, birth_bool, cycle_number, treatment_start_date) |> 
+  tidyr::drop_na()
+
+```
+
+### Live-birth Model {.tabset}
+
+#### Model Outputs
+
+```{r run_first_two_models}
+
+# <!-- After dropping rows with NA for any of `euploid_success`, `age`, `afc`, or `amh`, the treatment cycle-level dataset has `r nrow(m1df)` observations, `r nrow(m1df_eup)` of which achieved a euploid embryo success. -->
+  
+euploid_model <- glm(
+  euploid_success ~ age + amh + afc + amh*afc,
+  family = binomial,
+  data = m1df
+)
+
+live_birth_model <- glm(
+  birth_bool ~ age + amh + afc + age*amh*afc,
+  family = quasibinomial,
+  data = m1df |> dplyr::filter(euploid_success)
+)
+
+# ############################################################
+# # Export model coefficients for Excel pricing tool
+# ############################################################
+# 
+# euploid_coef_export <- coef(euploid_model) |>
+#   as.data.frame() |>
+#   tibble::rownames_to_column("term") |>
+#   dplyr::rename(estimate = 2) |>
+#   dplyr::mutate(model = "euploid")
+# 
+# readr::write_csv(
+#   euploid_coef_export,
+#   "outputs/euploid_model_coefficients.csv"
+# )
+# 
+# live_birth_coef_export <- coef(live_birth_model) |>
+#   as.data.frame() |>
+#   tibble::rownames_to_column("term") |>
+#   dplyr::rename(estimate = 2) |>
+#   dplyr::mutate(model = "live_birth_given_euploid")
+# 
+# readr::write_csv(
+#   live_birth_coef_export,
+#   "outputs/live_birth_model_coefficients.csv"
+# )
+
+m1df$pred_euploid <- predict(euploid_model, new_data = m1df, type = "response")
+# m1df$pred_euploid <- predict(euploid_model, new_data = m1df, type = "response")
+
+# Before applying recalibration, get metrics for model.
+euploid_pre_calib_metrics = get_metrics(euploid_model, m1df, 'euploid_success')
+
+# Apply recalibration corrections to these predicted values.
+euploid_cal_model_fit_res = fit_and_apply_calibration_model(m1df$euploid_success, m1df$pred_euploid)
+m1df$pred_euploid_recal = euploid_cal_model_fit_res$preds |> as.numeric()
+euploid_calib_interc = euploid_cal_model_fit_res$intercept
+euploid_calib_coef = euploid_cal_model_fit_res$slope
+
+# After applying recalibration, get metrics for model.
+euploid_post_calib_metrics = get_metrics(euploid_cal_model_fit_res$model, m1df, 'euploid_success')
+
+m1df_eup = m1df |> 
+  dplyr::filter(euploid_success)
+
+m1df_eup$pred_lb_given_euploid <- predict(
+  live_birth_model,
+  newdata = m1df_eup,
+  type = "response"
+)
+
+# Before applying recalibration, get metrics for model.
+lb_pre_calib_metrics = get_metrics(live_birth_model, m1df_eup, 'birth_bool')
+
+live_birth_cal_model_fit_res = fit_and_apply_calibration_model(m1df_eup$birth_bool, m1df_eup$pred_lb_given_euploid)
+m1df_eup$pred_lb_given_euploid_recal = live_birth_cal_model_fit_res$preds
+lb_calib_interc = live_birth_cal_model_fit_res$intercept
+lb_calib_coef = live_birth_cal_model_fit_res$slope
+
+# Before applying recalibration, get metrics for model.
+lb_post_calib_metrics = get_metrics(live_birth_cal_model_fit_res$model, m1df_eup, 'birth_bool')
+
+m1df_eup$pred_live_birth_recal <- m1df_eup$pred_euploid_recal * m1df_eup$pred_lb_given_euploid_recal
+
+livebirth_sim_results <- m1df_eup |>
+  dplyr::rowwise() |>
+  dplyr::mutate(
+    success_sim = rbinom(1, size = 1, prob = pred_live_birth_recal),
+    livebirth_success_simulated = success_sim >= 1
+  ) |>
+  dplyr::ungroup()
+```
+
+<!-- The live-birth model's measure of dispersion is `r check_dispersion(live_birth_model)`. -->
+
+```{r}
+livebirth_sim_results |>
+  DT::datatable()
+
+livebirth_sim_results |> 
+  dplyr::count(livebirth_success_simulated) |> 
+  dplyr::mutate(percentage = round( 100 * n / sum(n), 2)) |> 
+  knitr::kable()
+```
+
+```{r read_in_egg_dataframe_and_clean_it, include = F}
+
+# I'm unsure if we NEED to read in a new copy of the structured egg table... but if we do, we follow the same cleaning steps as above.
+
+
+# Zoom in on relevant rows, drop rows with no info for age and attempt.
+egg_df = egg_df |> 
+  dplyr::select(pat_id, egg_id, age, attempt, pgd_clinresult, frozen_embryo, frozen_egg, afc_other, afc_first_baseline, amh, amh_start) |> 
+  dplyr::filter(!is.na(age))
+
+# Add treatment course ID and cycle number ID columns
+df = df |> 
+  dplyr::arrange(pat_id, treatment_start_date) |>
+  dplyr::group_by(pat_id) |>
+  dplyr::mutate(
+    gap_days = as.numeric(treatment_start_date - dplyr::lag(treatment_start_date)),
+    new_treat_course = ifelse(is.na(gap_days) | gap_days > 365, 1, 0),
+    treat_course_id = cumsum(new_treat_course)
+  ) |> 
+  dplyr::select(-c(gap_days,new_treat_course)) |> 
+  # Define cycle number within a treatment course
+  dplyr::group_by(pat_id, treat_course_id) |>
+  dplyr::arrange(treatment_start_date) |>
+  # Cycle number is the key column we're making here - within a given 'treat_course', 
+  # we can have various related cycles (cycle 1, 2, etc.)
+  dplyr::mutate(cycle_number = dplyr::row_number()) |> 
+  dplyr::ungroup()
+
+cost_per_cycle <- 22014
+payout_amount <- 17611
+risk_margin <- 0.20
+admin_load <- 0.10
+
+n_sim <- 5000 # Monte Carlo iterations
+
+```
+
+#### Multi-cycle (Cumulative) Probabilities
+```{r}
+# --- Closed-form cumulative probability (Live Birth) ---
+livebirth_multi_cycle = m1df_eup |> 
+ dplyr::group_by(pat_id) |>
+  dplyr::summarise(
+    p1 = first(pred_live_birth_recal)
+  ) |>
+  dplyr::mutate(
+    one_cycle_scs = 1 - (1 - p1)^1,
+    two_cycles_scs = 1 - (1 - p1)^2,
+    three_cycles_scs = 1 - (1 - p1)^3,
+    one_cycle_fail = (1 - p1)^1,
+    two_cycles_fail = (1 - p1)^2,
+    three_cycles_fail = (1 - p1)^3
+  )
+
+livebirth_multi_cycle |> 
+  DT::datatable()
+
+readr::write_csv(livebirth_multi_cycle, "outputs/livebirth_multicycle_probabilities.csv")
+
+```
+
+#### Simulated Probabilities averaged by Age
+```{r}
+livebirth_sim_results |> 
+  dplyr::group_by(age) |> 
+  dplyr::reframe(
+    pct_livebirth_simulated = mean(livebirth_success_simulated, na.rm = TRUE)
+  ) |> 
+  dplyr::arrange(age) |> 
+  knitr::kable()
+```
+
+### Euploid Embryo Model (Binomial) {.tabset}
+
+#### Model Outputs
+
+<!-- The euploid model's measure of dispersion is `r check_dispersion(euploid_model)`. -->
+
+```{r}
+euploid_sim_results <- m1df |>
+  dplyr::rowwise() |>
+  dplyr::mutate(
+    success_sim = rbinom(1, size = 1, prob = pred_euploid_recal),
+    ge1_euploid_sim = success_sim >= 1
+  ) |>
+  dplyr::ungroup()
+
+euploid_sim_results |>
+  DT::datatable()
+
+euploid_sim_results |> 
+  dplyr::count(ge1_euploid_sim) |> 
+  dplyr::mutate(percentage = round( 100 * n / sum(n), 2)) |> 
+  knitr::kable()
+```
+
+#### Multi-cycle (Cumulative) Probabilities
+```{r}
+# --- Closed-form cumulative probability (Live Birth) ---
+euploid_multi_cycle = m1df |> 
+ dplyr::group_by(pat_id) |>
+  dplyr::summarise(
+    p1 = first(pred_euploid_recal)
+  ) |>
+  dplyr::mutate(
+    one_cycle_scs = 1 - (1 - p1)^1,
+    two_cycles_scs = 1 - (1 - p1)^2,
+    three_cycles_scs = 1 - (1 - p1)^3,
+    one_cycle_fail = (1 - p1)^1,
+    two_cycles_fail = (1 - p1)^2,
+    three_cycles_fail = (1 - p1)^3
+  )
+
+euploid_multi_cycle |> 
+  DT::datatable()
+
+readr::write_csv(euploid_multi_cycle, "outputs/euploid_embryo_multicycle_probabilities.csv")
+
+```
+
+#### Simulated Probabilities averaged by Age
+```{r}
+euploid_sim_results |> 
+  dplyr::group_by(age) |> 
+  dplyr::reframe(
+    pct_1_plus_euploid_sim = mean(ge1_euploid_sim, na.rm = TRUE)
+  ) |> 
+  dplyr::arrange(age) |> 
+  knitr::kable()
+```
+
+### Pre and Post Calibration Model Metrics
+```{r}
+calib_results = data.frame(
+  model = c(rep('euploid',2), rep('livebirth',2)),
+  pre_or_post = rep(c('pre','post'),2)
+)
+tbl_from_results_vec = function(vec){
+  # browser()
+  o = vec |> 
+    as.data.frame()
+  o$var_name = row.names(o)
+  o |> 
+    tidyr::pivot_wider(names_from = var_name, values_from = vec)
+}
+
+the_metrics = list(euploid_pre_calib_metrics, 
+     euploid_post_calib_metrics,
+     lb_pre_calib_metrics,
+     lb_post_calib_metrics) |> 
+  purrr::map(
+    \(x) tbl_from_results_vec(x)
+  ) |> 
+  dplyr::bind_rows()
+
+calib_results = calib_results |> 
+  dplyr::bind_cols(the_metrics)
+
+calib_results |> 
+  knitr::kable()
+
+# Export all the necessary bits for the Excel calculator.
+# Coefficients (for p_raw) - compute p_raw 
+# Calibration intercept (α)
+# Calibration slope (β)
+# Apply recalibration function
+
+euploid_coef_export <- coef(euploid_model) |>
+  as.data.frame() |>
+  tibble::rownames_to_column("term") |>
+  dplyr::rename(estimate = 2) |>
+  dplyr::mutate(model = "euploid")
+
+euploid_coef_export = euploid_coef_export |> 
+  dplyr::bind_rows(
+    calib_results |> dplyr::filter(model == 'euploid')
+  )
+
+readr::write_csv(
+  euploid_coef_export,
+  "outputs/euploid_model_coefficients.csv"
+)
+
+live_birth_coef_export <- coef(live_birth_model) |>
+  as.data.frame() |>
+  tibble::rownames_to_column("term") |>
+  dplyr::rename(estimate = 2) |>
+  dplyr::mutate(model = "live_birth_given_euploid")
+
+live_birth_coef_export = live_birth_coef_export |> 
+  dplyr::bind_rows(
+    calib_results |> dplyr::filter(model == 'livebirth')
+  )
+
+readr::write_csv(
+  live_birth_coef_export,
+  "outputs/live_birth_model_coefficients.csv"
+)
+```
+
+## Egg Actuarial Models (Beta-binomial / Binomial + Monte-Carlo Simulation) {.tabset}
+
+### Single-cycle Egg Model (Binomial model) {.tabset}
+
+```{r}
+# Remove rows where amh is unknown.
+df = df |> dplyr::filter(!is.na(amh))
+```
+
+#### Model Outputs
+
+Note: this model uses the patient / cycle-level table and does not currently filter away rows for eggs of cryo_day_2 or cryo_day_3; N of this dataframe is therefore `r nrow(df)`.
+
+```{r}
+
+df_no_na = df |> dplyr::select(pat_id, tx_id, num_eggs_collected, age, amh, afc) |> tidyr::drop_na()
+
+# First, construct a Poisson-distribution of the number of eggs collected based on the data we have
+egg_model <- MASS::glm.nb(
+  num_eggs_collected ~ age + amh + afc + age*afc,
+  # family = quasipoisson(link = "log"),
+  data = df_no_na
+)
+
+df_no_na$pred_eggmodel_1 = predict(egg_model, new_data = df_no_na, type = "response")
+
+# Next, for each patient, based on their characteristics (age, afc, amh), simulate 
+# 2000 hypothetical egg gathering treatments; these make up the simulated
+# expectable distribution that is unique to that patient. We then take 
+# out the 90th and 95th percentile of expectable eggs and use that as a 
+# threshold for whether or not a simulated session would be successful
+# for this patient. It's all about likelihoods!
+egg_1cycle_simulated_thresholds_by_patient = df_no_na |> 
+  dplyr::group_by(pat_id) |> 
+  dplyr::group_split() |> 
+  purrr::map( ~ {
+    sim_egg_1cycle_distribution = simulate_eggs(.x)
+    sim_egg_1cycle_90 = quantile(sim_egg_1cycle_distribution, 0.1)
+    sim_egg_1cycle_95 = quantile(sim_egg_1cycle_distribution, 0.05)
+    output = data.frame(
+      pat_id = .x$pat_id,
+      sim_egg_1cycle_90,
+      sim_egg_1cycle_95
+    )
+    row.names(output) = NULL
+    output |> tidyr::as_tibble()
+  },.progress) |> 
+  dplyr::bind_rows() |> 
+  dplyr::distinct() |> 
+  suppressWarnings()
+
+df_with_thresholds <- df_no_na |>
+  dplyr::left_join(egg_1cycle_simulated_thresholds_by_patient, by = "pat_id")
+
+# Now we simulate a single 'draw' for each patient, compare that draw to the 
+# patient-specific distribution of expectable number of eggs, and classify
+# the draw as either a success or a failure (i.e. above or below the threshold, respectively)
+eggmodel_sim_results <- df_with_thresholds |>
+  dplyr::rowwise() %>%
+  dplyr::mutate(
+    sim_eggs_one_cycle = simulate_eggs(., n = 1),
+    success_90 = sim_eggs_one_cycle >= sim_egg_1cycle_90,
+    success_95 = sim_eggs_one_cycle >= sim_egg_1cycle_95
+  ) |>
+  dplyr::ungroup()
+
+eggmodel_sim_results |> 
+  dplyr::count(success_90, success_95) |> 
+  dplyr::mutate(percentage = round(100*n/sum(n),4))
+
+# Conversion of simulated successes/failures to predicted probabilities so we can
+# apply the same model tests and validations to the egg models as we do to 
+# the live-birth and euploid embryo eggs.
+eggmodel_sim_results <- eggmodel_sim_results %>%
+  dplyr::mutate(
+    pred_prob_success_90 = estimate_prob_success(
+      ., simulate_eggs, "sim_egg_1cycle_90", n_sim = 1000
+    ),
+    pred_prob_success_95 = estimate_prob_success(
+      ., simulate_eggs, "sim_egg_1cycle_95", n_sim = 1000
+    )
+  )
+```
+
+#### Simulated Probabilities averaged by Age
+```{r}
+eggmodel_sim_results |>
+  dplyr::group_by(age) |>
+  dplyr::reframe(
+    pct_success_90 = mean(success_90, na.rm = TRUE),
+    pct_success_95 = mean(success_95, na.rm = TRUE),
+  ) |>
+  dplyr::arrange(age) |>
+  knitr::kable()
+```
+
+### Two-cycle Egg Model (Binomial model) {.tabset}
+
+Note: this model includes only patients that have more than one treatment recorded in the dataset.
+Note: this model assumes that treatments that occur within 365 days belong to a single treatment course, i.e. a collection of cycles including cycle 1, cycle 2, etc.; this assumption was necessary to compute this model because the dataset lacks a variable that otherwise links treatments across time. We could modify this assumption by removing this 365-day date proximity threshold, though this may incorrectly imply relatedness between distinct treatments performed by a patient across multiple years.
+
+#### Model Outputs
+
+```{r}
+df_2 <- df %>%
+  dplyr::arrange(pat_id, treatment_start_date) %>%
+  dplyr::group_by(pat_id) %>%
+  dplyr::mutate(
+    eggs_cycle1 = num_eggs_collected,
+    eggs_cycle2 = dplyr::lead(num_eggs_collected),
+    eggs_2cycle_total = eggs_cycle1 + eggs_cycle2
+  ) %>%
+  dplyr::filter(!is.na(eggs_2cycle_total)) %>%
+  dplyr::ungroup()
+
+# Ensure we don't have missing data for any of our variables.
+df_2 = df_2 |> 
+  dplyr::select(pat_id, eggs_2cycle_total, age, amh, afc, eggs_cycle1, eggs_cycle2, eggs_2cycle_total) |> 
+  tidyr::drop_na()
+
+egg2_model <- MASS::glm.nb(
+  eggs_2cycle_total ~ age + amh + afc + eggs_cycle1 + amh*afc,
+  # family = quasipoisson(link = "log"),
+  data = df_2
+)
+
+df_2$pred_eggmodel_2 = predict(egg2_model, new_data = df_2, type = "response")
+
+# Next, for each patient, based on their characteristics (age, afc, amh), simulate 
+# 2000 hypothetical egg gathering treatments; these make up the simulated
+# expectable distribution that is unique to that patient. We then take 
+# out the 90th and 95th percentile of expectable eggs and use that as a 
+# threshold for whether or not a simulated session would be successful
+# for this patient. It's all about likelihoods!
+egg_2cycle_simulated_thresholds_by_patient = df_2 |> 
+  dplyr::group_by(pat_id) |> 
+  dplyr::group_split() |> 
+  purrr::map( ~ {
+    sim_egg_2cycle_distribution = simulate_eggs2(.x)
+    sim_egg_2cycle_90 = quantile(sim_egg_2cycle_distribution, 0.1)
+    sim_egg_2cycle_95 = quantile(sim_egg_2cycle_distribution, 0.05)
+    output = data.frame(
+      pat_id = .x$pat_id,
+      sim_egg_2cycle_90,
+      sim_egg_2cycle_95
+    )
+    row.names(output) = NULL
+    output |> tidyr::as_tibble()
+  },.progress) |> 
+  dplyr::bind_rows() |> 
+  dplyr::distinct() |> 
+  suppressWarnings()
+
+df2_with_thresholds <- df_2 |>
+  dplyr::left_join(egg_2cycle_simulated_thresholds_by_patient, by = "pat_id")
+
+# Now we simulate a single 'draw' for each patient, compare that draw to the 
+# patient-specific distribution of expectable number of eggs, and classify
+# the draw as either a success or a failure (i.e. above or below the threshold, respectively)
+eggmodel2_sim_results <- df2_with_thresholds |>
+  dplyr::rowwise() %>%
+  dplyr::mutate(
+    sim_eggs_two_cycle = simulate_eggs2(., n = 1),
+    success_90 = sim_eggs_two_cycle >= sim_egg_2cycle_90,
+    success_95 = sim_eggs_two_cycle >= sim_egg_2cycle_95
+  ) |>
+  dplyr::ungroup()
+
+eggmodel2_sim_results |> 
+  dplyr::count(success_90, success_95) |> 
+  dplyr::mutate(percentage = round(100*n/sum(n),4))
+
+eggmodel2_sim_results <- eggmodel2_sim_results %>%
+  dplyr::mutate(
+    pred_prob_success_90 = estimate_prob_success(
+      ., simulate_eggs2, "sim_egg_2cycle_90", n_sim = 1000
+    ),
+    pred_prob_success_95 = estimate_prob_success(
+      ., simulate_eggs2, "sim_egg_2cycle_95", n_sim = 1000
+    )
+  )
+```
+
+#### Simulated Probabilities averaged by Age
+```{r}
+eggmodel2_sim_results |>
+  dplyr::group_by(age) |>
+  dplyr::reframe(
+    pct_success_90 = mean(success_90, na.rm = TRUE),
+    pct_success_95 = mean(success_95, na.rm = TRUE),
+  ) |>
+  dplyr::arrange(age) |>
+  knitr::kable()
+```
+
+```{r, include = F}
+# Euploid model ROC / AUC
+roc_livebirth <- roc(livebirth_sim_results$livebirth_success_simulated, livebirth_sim_results$pred_live_birth_recal)
+auc_livebirth <- auc(roc_livebirth)
+roc_euploid <- roc(m1df$euploid_success, m1df$pred_euploid_recal)
+auc_euploid <- auc(roc_euploid)
+roc_egg1 <- roc(eggmodel_sim_results$success_90, eggmodel_sim_results$pred_eggmodel_1)
+auc_egg1 <- auc(roc_egg1)
+roc_egg2 <- roc(eggmodel2_sim_results$success_90, eggmodel2_sim_results$pred_eggmodel_2)
+auc_egg2 <- auc(roc_egg2)
+
+# --- INTERPRETATION GUIDE ---
+# AUC < 0.60 → Poor model (not usable)
+# AUC 0.60–0.70 → Weak (needs improvement or more predictors)
+# AUC 0.70–0.80 → Acceptable
+# AUC 0.80–0.90 → Strong
+# AUC > 0.90 → Possibly overfit (check carefully)
+
+# plot(roc_euploid)
+
+# Dispersion checks
+disp_livebirth = check_dispersion(live_birth_model)
+disp_euploid <- check_dispersion(euploid_model)
+disp_egg <- check_dispersion(egg_model)
+disp_egg2 <- check_dispersion(egg2_model)
+```
+
+## Summary Table
+```{r}
+
+```
+
