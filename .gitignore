@@ -10,3 +10,4 @@ outputs/*
 *.html
 .RData*
 *.csv
+.positai
