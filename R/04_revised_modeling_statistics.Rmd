@@ -34,6 +34,12 @@ egg_df = readr::read_rds("data/clean_data/cleaned_egg_level_df.rds")
 
 # Number of unique PAT ids
 df = df |> dplyr::mutate(the_year = lubridate::year(treatment_start_date))
+
+# Read in the datasets we prepped in "fertility_data_prep" file!
+df_livebirth = readr::read_csv("data/prepped_data/df_livebirth.csv")
+df_euploid = readr::read_csv("data/prepped_data/df_euploid.csv")
+df_egg1 = readr::read_csv("data/prepped_data/df_egg1.csv")
+df_egg2 = readr::read_csv("data/prepped_data/df_egg2.csv")
 ```
 
 # Descriptive Statistics {.tabset}
@@ -207,6 +213,9 @@ m1df = df |>
   tidyr::drop_na()
 
   # dplyr::filter(treatment == 'ICSI')
+
+# Write over dataset with the fertility_data_prepped version:
+m1df = df_euploid
 ```
 
 
@@ -225,10 +234,13 @@ euploid_model <- glm(
   data = m1df
 )
 
+# Write over dataset with the fertility_data_prepped version:
+m1df_eup = df_livebirth
+
 live_birth_model <- glm(
   birth_bool ~ age + amh + afc,
   family = quasibinomial,
-  data = m1df |> dplyr::filter(euploid_success)
+  data = m1df_eup
 )
 
 ############################################################
@@ -440,6 +452,9 @@ Note: this model uses the patient / cycle-level table and does not currently fil
 
 df_no_na = df |> dplyr::select(pat_id, tx_id, num_eggs_collected, age, amh, afc) |> tidyr::drop_na()
 
+# Write over dataset with the fertility_data_prepped version:
+df_no_na = df_egg1
+
 # First, construct a Poisson-distribution of the number of eggs collected based on the data we have
 egg_model <- MASS::glm.nb(
   num_eggs_collected ~ age + amh + afc,
@@ -542,6 +557,9 @@ df_2 <- df %>%
 df_2 = df_2 |> 
   dplyr::select(pat_id, eggs_2cycle_total, age, amh, afc, eggs_cycle1, eggs_cycle2, eggs_2cycle_total) |> 
   tidyr::drop_na()
+
+# Write over dataset with the fertility_data_prepped version:
+df_2 = df_egg2
 
 egg2_model <- MASS::glm.nb(
   eggs_2cycle_total ~ age + amh + afc + eggs_cycle1,
