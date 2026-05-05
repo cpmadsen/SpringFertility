@@ -87,6 +87,15 @@ list(
   knitr::kable()
 ```
 
+### Removing rows from each dataframe where AMH > 12 and AFC > 40
+
+```{r}
+m1df = m1df |> dplyr::filter(!(amh > 12 & afc > 40))
+m1df_eup = m1df_eup |> dplyr::filter(!(amh > 12 & afc > 40))
+df_no_na = df_no_na |> dplyr::filter(!(amh > 12 & afc > 40))
+df_2 = df_2 |> dplyr::filter(!(amh > 12 & afc > 40))
+```
+
 ```{r}
 ############################################################
 # DATA PREP + AGE POOLING + TRAIN/VALIDATION CALIBRATION
