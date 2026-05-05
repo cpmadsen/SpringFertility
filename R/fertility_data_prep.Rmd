@@ -90,10 +90,10 @@ list(
 ### Removing rows from each dataframe where AMH > 12 and AFC > 40
 
 ```{r}
-m1df = m1df |> dplyr::filter(!(amh > 12 & afc > 40))
-m1df_eup = m1df_eup |> dplyr::filter(!(amh > 12 & afc > 40))
-df_no_na = df_no_na |> dplyr::filter(!(amh > 12 & afc > 40))
-df_2 = df_2 |> dplyr::filter(!(amh > 12 & afc > 40))
+m1df = m1df |> dplyr::filter(amh <= 12 & afc <= 40)
+m1df_eup = m1df_eup |> dplyr::filter(amh <= 12 & afc <= 40)
+df_no_na = df_no_na |> dplyr::filter(amh <= 12 & afc <= 40)
+df_2 = df_2 |> dplyr::filter(amh <= 12 & afc <= 40)
 ```
 
 ### Checking Egg Outliers
@@ -606,7 +606,10 @@ readr::write_csv(df_egg1, "data/prepped_data/df_egg1.csv")
 readr::write_csv(df_egg2, "data/prepped_data/df_egg2.csv")
 ```
 
-```{r}
-
+```{r also_write_out_the_training_datasets}
+readr::write_rds(df_lb_train,"data/models/df_lb_train.rds")
+readr::write_rds(df_eu_train,"data/models/df_eu_train.rds")
+readr::write_rds(df_e1_train,"data/models/df_e1_train.rds")
+readr::write_rds(df_e2_train,"data/models/df_e2_train.rds")
 ```
 
