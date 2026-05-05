@@ -57,6 +57,34 @@ df_2 = df_2 |>
   dplyr::select(pat_id, eggs_2cycle_total, age, amh, afc, eggs_cycle1, eggs_cycle2, eggs_2cycle_total) |> 
   tidyr::drop_na()
 
+# Dataframe to model lookup:
+# 1. Model 1 (live-birth) uses m1df_eup
+# 2. Model 2 (euploid embryo) uses m1df
+# 3. Egg-1 model uses df_no_na
+# 4. Egg-2 model uses df_2
+```
+
+```{r counts_of_particular_slices_of_data}
+# ── Count patients with AMH > 12 ─────────────────────────
+# Run on each raw data frame separately — patients may appear
+# in multiple frames (e.g., same patient in livebirth and euploid)
+# so do not sum across frames without deduplicating first.
+list(
+  m1df_eup |> 
+    dplyr::mutate(dataframe_for_model = "livebirth") |> 
+    dplyr::count(dataframe_for_model, amh > 12, afc > 40),
+  m1df |> 
+    dplyr::mutate(dataframe_for_model = "euploid_embryo") |> 
+    dplyr::count(dataframe_for_model, amh > 12, afc > 40),
+  df_no_na |> 
+    dplyr::mutate(dataframe_for_model = "egg_model_1") |> 
+    dplyr::count(dataframe_for_model, amh > 12, afc > 40),
+  df_2 |> 
+    dplyr::mutate(dataframe_for_model = "egg_model_2") |> 
+    dplyr::count(dataframe_for_model, amh > 12, afc > 40)
+) |> 
+  dplyr::bind_rows() |> 
+  knitr::kable()
 ```
 
 ```{r}
