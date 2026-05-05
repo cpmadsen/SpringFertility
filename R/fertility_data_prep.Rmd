@@ -96,6 +96,26 @@ df_no_na = df_no_na |> dplyr::filter(!(amh > 12 & afc > 40))
 df_2 = df_2 |> dplyr::filter(!(amh > 12 & afc > 40))
 ```
 
+### Checking Egg Outliers
+
+```{r}
+egg_1_cutoff = df_no_na$num_eggs_collected |> quantile(0.99) |> round()
+print(paste0("Egg Model 1 cutoff for data inclusion (99% quantile): ",egg_1_cutoff, " eggs maximum"))
+
+egg_2_cutoff = df_2$eggs_2cycle_total |> quantile(0.99) |> round()
+print(paste0("Egg Model 2 cutoff for data inclusion (99% quantile): ",egg_2_cutoff, " eggs maximum"))
+
+egg_1_perc_dropped = round(100*nrow(df_no_na |> dplyr::filter(num_eggs_collected > egg_1_cutoff))/nrow(df_no_na),2)
+egg_2_perc_dropped = round(100*nrow(df_2 |> dplyr::filter(eggs_2cycle_total > egg_2_cutoff))/nrow(df_2),2)
+
+print(paste0("Dropping outlier rows from egg 1 model dataframe drops ",nrow(df_no_na) - nrow(df_no_na |> dplyr::filter(num_eggs_collected <= egg_1_cutoff))," rows (",egg_1_perc_dropped,"%)"))
+print(paste0("Dropping outlier rows from egg 2 model dataframe drops ",nrow(df_2) - nrow(df_2 |> dplyr::filter(eggs_2cycle_total <= egg_2_cutoff))," rows (",egg_2_perc_dropped,"%)"))
+
+df_no_na = df_no_na |> dplyr::filter(num_eggs_collected <= egg_1_cutoff)
+df_2 = df_2 |> dplyr::filter(eggs_2cycle_total <= egg_2_cutoff)
+```
+
+
 ```{r}
 ############################################################
 # DATA PREP + AGE POOLING + TRAIN/VALIDATION CALIBRATION
@@ -482,8 +502,8 @@ egg_cal_check <- function(df_val, pred_col, outcome_col, age_col = "age_model") 
 egg1_cal_table <- egg_cal_check(df_e1_val, "pred_mu", col_outcome_e1)
 egg2_cal_table <- egg_cal_check(df_e2_val, "pred_mu", col_outcome_e2)
 
-egg1_cal_table |> knitr::kable()
-egg2_cal_table |> knitr::kable()
+egg1_cal_table |> dplyr::mutate(model = 'egg_1') |> dplyr::select(model, dplyr::everything()) |> knitr::kable()
+egg2_cal_table |> dplyr::mutate(model = 'egg_2') |> dplyr::select(model, dplyr::everything()) |> knitr::kable()
 
 ############################################################
 # 6. SUMMARY METRICS
