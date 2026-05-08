@@ -106,12 +106,10 @@ afc_cap <- 40
 # The script will STOP if these are left as NA.
 # ------------------------------------------------------------
 
-
-lb_cal_intercept <- 0.07910000
-lb_cal_slope     <- 0.96990000
-eu_cal_intercept <- 0.06230000
-eu_cal_slope     <- 0.84490000
-
+lb_cal_intercept <- lb_cal_int_refit
+lb_cal_slope     <- lb_cal_slope_refit
+eu_cal_intercept <- eu_cal_int_refit
+eu_cal_slope     <- eu_cal_slope_refit
 
 # Safety stop
 if (any(is.na(c(lb_cal_intercept, lb_cal_slope,
