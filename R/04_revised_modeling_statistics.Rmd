@@ -376,6 +376,12 @@ livebirth_sim_results |>
   knitr::kable()
 ```
 
+### Model Details
+
+N: `r nrow(m1df_eup)`.
+Model type used: Quasibinomial
+Exclusions: AMH < 12 and AFC > 40
+
 ## Euploid Embryo Model (Binomial) {.tabset}
 
 ### Model Outputs
@@ -434,6 +440,12 @@ euploid_sim_results |>
   dplyr::arrange(age) |> 
   knitr::kable()
 ```
+
+### Model Details
+
+N: `r nrow(m1df)`.
+Model type used: Binomial
+Exclusions: AMH < 12 and AFC > 40
 
 # Egg Actuarial Models (Beta-binomial / Binomial + Monte-Carlo Simulation) {.tabset}
 
@@ -534,10 +546,16 @@ eggmodel_sim_results |>
   knitr::kable()
 ```
 
+### Model Details
+
+N: `r nrow(df_no_na)`.
+Model type used: Negative Binomial
+Exclusions: AMH < 12 and AFC > 40
+
 ## Two-cycle Egg Model (Binomial model) {.tabset}
 
 Note: this model includes only patients that have more than one treatment recorded in the dataset.
-Note: this model assumes that treatments that occur within 365 days belong to a single treatment course, i.e. a collection of cycles including cycle 1, cycle 2, etc.; this assumption was necessary to compute this model because the dataset lacks a variable that otherwise links treatments across time. We could modify this assumption by removing this 365-day date proximity threshold, though this may incorrectly imply relatedness between distinct treatments performed by a patient across multiple years.
+Note: this model assumes that treatments that occur within 365 days belong to a single treatment course, i.e. a collection of cycles including cycle 1, cycle   2, etc.; this assumption was necessary to compute this model because the dataset lacks a variable that otherwise links treatments across time. We could modify this assumption by removing this 365-day date proximity threshold, though this may incorrectly imply relatedness between distinct treatments performed by a patient across multiple years.
 
 ### Model Outputs
 
@@ -635,6 +653,12 @@ eggmodel2_sim_results |>
   dplyr::arrange(age) |>
   knitr::kable()
 ```
+
+### Model Details
+
+N: `r nrow(df_2)`.
+Model type used: Negative Binomial
+Exclusions: AMH < 12 and AFC > 40
 
 ```{r, include = F}
 # Euploid model ROC / AUC
