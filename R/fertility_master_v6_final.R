@@ -515,25 +515,28 @@ set.seed(42)  # Fixed -- do not change between runs
 # EGG 1 GRID
 egg1_grid <- expand.grid(
   age_model = grid_ages,
-  amh       = grid_amh,
-  afc       = grid_afc,
+  amh = grid_amh,
+  afc = grid_afc,
   stringsAsFactors = FALSE
 ) %>%
-  rowwise() %>%
   mutate(
-    mu      = predict(egg1_model,
-                      newdata = data.frame(age_model = age_model,
-                                           amh = amh, afc = afc),
-                      type = "response"),
-    sims    = list(rnbinom(n_sim, mu = mu, size = e1_theta)),
-    t90_int = as.integer(floor(quantile(sims[[1]], 0.10))),
-    t95_int = as.integer(floor(quantile(sims[[1]], 0.05))),
-    mu_rnd  = round(mu, 2)
+    mu = predict(
+      egg1_model,
+      newdata = data.frame(
+        age_model = age_model,
+        amh = amh,
+        afc = afc
+      ),
+      type = "response"
+    ),
+    sims = map(mu, ~ rnbinom(n_sim, mu = .x, size = e1_theta)),
+    t90_int = map_dbl(sims, ~ quantile(.x, 0.10)) %>% floor() %>% as.integer(),
+    t95_int = map_dbl(sims, ~ quantile(.x, 0.05)) %>% floor() %>% as.integer(),
+    mu_rnd = round(mu, 2)
   ) %>%
-  ungroup() %>%
   dplyr::select(age_model, amh, afc, mu_rnd, t90_int, t95_int)
 
-
+  
 names(egg1_grid) <- c("Age", "AMH", "AFC",
                       "Expected_Eggs_Mean",
                       "Threshold_90pct", "Threshold_95pct")
@@ -543,36 +546,47 @@ message(sprintf("    Egg1 done: %d profiles.", nrow(egg1_grid)))
 
 
 # EGG 2 GRID -- CHANGE [3]: correction applied to mu before simulation
+
 egg2_grid <- expand.grid(
-  age_model   = grid_ages,
-  amh         = grid_amh,
-  afc         = grid_afc,
+  age_model = grid_ages,
+  amh = grid_amh,
+  afc = grid_afc,
   eggs_cycle1 = grid_cy1_eggs,
   stringsAsFactors = FALSE
 ) %>%
-  rowwise() %>%
   mutate(
-    mu_raw  = predict(egg2_model,
-                      newdata = data.frame(age_model   = age_model,
-                                           amh         = amh,
-                                           afc         = afc,
-                                           eggs_cycle1 = eggs_cycle1),
-                      type = "response"),
+    mu_raw = predict(
+      egg2_model,
+      newdata = data.frame(
+        age_model = age_model,
+        amh = amh,
+        afc = afc,
+        eggs_cycle1 = eggs_cycle1
+      ),
+      type = "response"
+    ),
+    
     # Apply age 43+ bias correction before simulation
     # Documented: obs/pred = 14.75/17.32 = 0.851 from validation
-    mu      = ifelse(age_model >= egg2_age43_threshold,
-                     mu_raw * egg2_age43_correction,
-                     mu_raw),
-    sims    = list(rnbinom(n_sim, mu = mu, size = e2_theta)),
-    t90_int = as.integer(floor(quantile(sims[[1]], 0.10))),
-    t95_int = as.integer(floor(quantile(sims[[1]], 0.05))),
-    mu_rnd  = round(mu, 2),
+    mu = ifelse(
+      age_model >= egg2_age43_threshold,
+      mu_raw * egg2_age43_correction,
+      mu_raw
+    ),
+    
+    sims = map(mu, ~ rnbinom(n_sim, mu = .x, size = e2_theta)),
+    
+    t90_int = map_dbl(sims, ~ quantile(.x, 0.10)) %>% floor() %>% as.integer(),
+    t95_int = map_dbl(sims, ~ quantile(.x, 0.05)) %>% floor() %>% as.integer(),
+    
+    mu_rnd = round(mu, 2),
     mu_raw_rnd = round(mu_raw, 2),
     corrected = age_model >= egg2_age43_threshold
   ) %>%
-  ungroup() %>%
-  dplyr::select(age_model, amh, afc, eggs_cycle1,
-         mu_rnd, mu_raw_rnd, corrected, t90_int, t95_int)
+  dplyr::select(
+    age_model, amh, afc, eggs_cycle1,
+    mu_rnd, mu_raw_rnd, corrected, t90_int, t95_int
+  )
 
 
 names(egg2_grid) <- c("Age", "AMH", "AFC", "Eggs_Cycle1",
@@ -1067,13 +1081,13 @@ setRowHeights(wb, ws_io, rows=22, heights=18)
 # Columns on Client Price Sheet: A=Location, B=Euploid, C=Live_Birth, D=Egg1, E=Egg2
 cost_lookup_rows <- list(
   list(r=23, lbl="Cost per cycle (Euploid)",
-       formula="=VLOOKUP(C8,'Client Price Sheet'!B5:F8,2,FALSE)"),
+       formula="=VLOOKUP(C8,'Client Price Sheet'!A5:E8,2,FALSE)"),
   list(r=24, lbl="Cost per cycle (Live birth)",
-       formula="=VLOOKUP(C8,'Client Price Sheet'!B5:F8,3,FALSE)"),
+       formula="=VLOOKUP(C8,'Client Price Sheet'!A5:E8,3,FALSE)"),
   list(r=25, lbl="Cost per cycle (Egg 1-cycle)",
-       formula="=VLOOKUP(C8,'Client Price Sheet'!B5:F8,4,FALSE)"),
+       formula="=VLOOKUP(C8,'Client Price Sheet'!A5:E8,4,FALSE)"),
   list(r=26, lbl="Cost per cycle (Egg 2-cycle)",
-       formula="=VLOOKUP(C8,'Client Price Sheet'!B5:F8,5,FALSE)")
+       formula="=VLOOKUP(C8,'Client Price Sheet'!A5:E8,5,FALSE)")
 )
 for (cr in cost_lookup_rows) {
   writeData(wb, ws_io, cr$lbl,
