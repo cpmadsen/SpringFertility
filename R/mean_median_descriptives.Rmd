@@ -1,0 +1,100 @@
+---
+title: "AMH and AFC Summary by Age"
+author: "Brandon Kwon"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: readable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+
+library(tidyverse)
+library(knitr)
+```
+
+---
+
+```{r import data}
+df_lb_train = readr::read_rds("data/models/df_lb_train.rds")
+df_eu_train = readr::read_rds("data/models/df_eu_train.rds")
+df_e1_train = readr::read_rds("data/models/df_e1_train.rds")
+df_e2_train = readr::read_rds("data/models/df_e2_train.rds")
+```
+
+# Summary Function
+
+```{r summary-function}
+summarize_amh_afc <- function(df) {
+
+  df %>%
+    filter(age_model %in% c(32, 37, 41)) %>%
+    group_by(age_model) %>%
+    summarize(
+      n = n(),
+      mean_amh = round(mean(amh, na.rm = TRUE), 2),
+      median_amh = round(median(amh, na.rm = TRUE), 2),
+      mean_afc = round(mean(afc, na.rm = TRUE), 1),
+      median_afc = round(median(afc, na.rm = TRUE), 1),
+      .groups = "drop"
+    )
+
+}
+```
+
+# Live Birth Training Dataset
+
+```{r lb-train-summary}
+lb_train_summary <- summarize_amh_afc(df_lb_train)
+
+kable(
+  lb_train_summary,
+  caption = "Live Birth Training Dataset Summary"
+)
+```
+
+---
+
+# Euploid Dataset
+
+```{r euploid-summary}
+euploid_summary <- summarize_amh_afc(df_eu_train)
+
+kable(
+  euploid_summary,
+  caption = "Euploid Dataset Summary"
+)
+```
+
+---
+
+# Egg 1 Dataset
+
+```{r egg1-summary}
+egg1_summary <- summarize_amh_afc(df_e1_train)
+
+kable(
+  egg1_summary,
+  caption = "Egg 1 Dataset Summary"
+)
+```
+
+---
+
+# Egg 2 Dataset
+
+```{r egg2-summary}
+egg2_summary <- summarize_amh_afc(df_e2_train)
+
+kable(
+  egg2_summary,
+  caption = "Egg 2 Dataset Summary"
+)
+```
