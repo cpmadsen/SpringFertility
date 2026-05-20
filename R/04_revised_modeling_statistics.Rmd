@@ -1099,3 +1099,11 @@ plot_egg_distribution <- function(newdata) {
 plot_egg_distribution(new_patient)
 
 ```
+
+```{r}
+readr::write_rds(live_birth_model, "data/models/livebirth_model_revised_modeling_statistics_end.rds")
+readr::write_rds(euploid_model, "data/models/euploid_model_revised_modeling_statistics_end.rds")
+readr::write_rds(egg_model, "data/models/egg_1_model_revised_modeling_statistics_end.rds")
+readr::write_rds(egg2_model, "data/models/egg_2_model_revised_modeling_statistics_end.rds")
+```
+
