@@ -24,7 +24,7 @@ df_2025 = df_2025 |>
   dplyr::rename(patient_id = id)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOCK 1: EGG FREEZING — Oocyte Cryopreservation cases, outcome = num_m2_eggs
+# EGG FREEZING — Oocyte Cryopreservation cases
 # ══════════════════════════════════════════════════════════════════════════════
 
 output_log = output_log |> append(list("=== EGG FREEZING ANALYSIS ==="))
@@ -84,8 +84,7 @@ output_log = output_log |> append(list(paste0("[Egg Freezing] Total payout cases
 output_log = output_log |> append(list(paste0("[Egg Freezing] Surprise failures: ", sum(payout_review_egg$surprise_failure))))
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOCK 2: EMBRYO GUARANTEE — Dual Stim / ICSI / Embryo Cryo
-#          Outcomes: num_blast, num_euploid_embryos (via euploid_model)
+# EMBRYO GUARANTEE — Dual Stim / ICSI / Embryo Cryo
 # ══════════════════════════════════════════════════════════════════════════════
 
 output_log = output_log |> append(list("=== EMBRYO GUARANTEE ANALYSIS ==="))
