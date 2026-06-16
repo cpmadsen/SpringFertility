@@ -115,7 +115,6 @@ df_no_na = df_no_na |> dplyr::filter(num_eggs_collected <= egg_1_cutoff)
 df_2 = df_2 |> dplyr::filter(eggs_2cycle_total <= egg_2_cutoff)
 ```
 
-
 ```{r}
 ############################################################
 # DATA PREP + AGE POOLING + TRAIN/VALIDATION CALIBRATION
@@ -599,6 +598,9 @@ message(sprintf("df_livebirth : %d rows", nrow(df_livebirth)))
 message(sprintf("df_euploid   : %d rows", nrow(df_euploid)))
 message(sprintf("df_egg1      : %d rows", nrow(df_egg1)))
 message(sprintf("df_egg2      : %d rows", nrow(df_egg2)))
+
+dir.create('data/prepped_data', showWarnings = F)
+dir.create('data/models', showWarnings = F)
 
 readr::write_csv(df_livebirth, "data/prepped_data/df_livebirth.csv")
 readr::write_csv(df_euploid, "data/prepped_data/df_euploid.csv")
