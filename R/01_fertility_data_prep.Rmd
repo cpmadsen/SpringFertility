@@ -269,6 +269,39 @@ message(sprintf(
 # 2. AGE POOLING
 ############################################################
 
+# Combine all four datasets, just looking at count of ages.
+age_plot_dat = raw_livebirth |> dplyr::count(age) |> dplyr::mutate(df = 'livebirth') |> 
+  dplyr::bind_rows(raw_euploid |> dplyr::count(age) |> dplyr::mutate(df = 'euploid')) |> 
+  dplyr::bind_rows(raw_egg1 |> dplyr::count(age) |> dplyr::mutate(df = 'egg1')) |> 
+  dplyr::bind_rows(raw_egg2 |> dplyr::count(age) |> dplyr::mutate(df = 'egg2'))
+
+# Find mean and 10% / 90% quartiles.
+age_plot_dat2 = age_plot_dat |> 
+  tidyr::uncount(n) |> 
+  dplyr::group_by(df) |> 
+  dplyr::reframe(mean_age = mean(age),
+                 q10 = quantile(age, .1),
+                 q90 = quantile(age, .9)) |> 
+  tidyr::pivot_longer(cols = c(mean_age, q10, q90))
+
+age_plot = age_plot_dat |> 
+  ggplot() + geom_col(aes(x = age, y = n, group = df)) + 
+  geom_vline(data = age_plot_dat2, aes(group = df, xintercept = value, colour = name),
+             lty = 2) +
+  facet_wrap( ~ df) + 
+  scale_x_continuous(breaks = seq(22,50,2)) + 
+  scale_colour_manual(values = c("mean_age" = "purple", "q10" = 'lightblue', "q90" = "lightblue")) +
+  theme_minimal() +
+  theme(legend.position = 'bottom')
+
+ggsave(filename = 'outputs/age_distribution_across_all_datasets.png',
+       plot = age_plot, width = 5, height = 4)
+
+# Also make a table of ages?
+age_plot_dat |> 
+  tidyr::pivot_wider(names_from = df, values_from = n, values_fill = 0) |> 
+  knitr::kable()
+
 apply_age_floor <- function(df, age_col, floor_val) {
   df %>%
     mutate(
@@ -613,5 +646,10 @@ readr::write_rds(df_lb_train,"data/models/df_lb_train.rds")
 readr::write_rds(df_eu_train,"data/models/df_eu_train.rds")
 readr::write_rds(df_e1_train,"data/models/df_e1_train.rds")
 readr::write_rds(df_e2_train,"data/models/df_e2_train.rds")
+
+readr::write_rds(lb_cal_int_refit,"data/models/lb_cal_int_refit.rds")
+readr::write_rds(lb_cal_slope_refit,"data/models/lb_cal_slope_refit.rds")
+readr::write_rds(eu_cal_int_refit,"data/models/eu_cal_int_refit.rds")
+readr::write_rds(eu_cal_slope_refit,"data/models/eu_cal_slope_refit.rds")
 ```
 
