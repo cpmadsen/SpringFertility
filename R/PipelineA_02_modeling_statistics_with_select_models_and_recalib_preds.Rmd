@@ -20,6 +20,9 @@ library(knitr)
 library(tidyr)
 library(readr)
 set.seed(123)
+
+# Must match age_floor in PipelineA_01. Under-32 patients are treated as 32.
+age_floor <- 32
 ```
 
 ```{r define_functions}
@@ -206,7 +209,11 @@ m1df = df |>
   dplyr::mutate(cycle_number = dplyr::row_number()) |> 
   dplyr::ungroup() |> 
   dplyr::select(pat_id, euploid_success, age, afc, amh, birth_bool, cycle_number, treatment_start_date) |> 
-  tidyr::drop_na()
+  tidyr::drop_na() |> 
+  # -- consistency with PipelineA_01: same eligibility exclusion + age floor,
+  #    so this report describes the same population that is priced/validated.
+  dplyr::filter(amh <= 12 & afc <= 40) |> 
+  dplyr::mutate(age_model = pmax(age, age_floor))
 
 ```
 
@@ -218,17 +225,14 @@ m1df = df |>
 
 # <!-- After dropping rows with NA for any of `euploid_success`, `age`, `afc`, or `amh`, the treatment cycle-level dataset has `r nrow(m1df)` observations, `r nrow(m1df_eup)` of which achieved a euploid embryo success. -->
   
-euploid_model <- glm(
-  euploid_success ~ age + amh + afc + amh*afc,
-  family = binomial,
-  data = m1df
-)
-
-live_birth_model <- glm(
-  birth_bool ~ age + amh + afc + age*amh*afc,
-  family = quasibinomial,
-  data = m1df |> dplyr::filter(euploid_success)
-)
+# -- consistency: use the floored deployed models saved by PipelineA_01 --
+# Previously these were refit here on RAW age (and on a different data slice),
+# which is why the report disagreed with the priced/validated models. They are
+# now loaded so everything downstream uses the exact same fitted objects.
+#   euploid_model    : euploid_success ~ age_model + amh + afc + amh:afc  (binomial)
+#   live_birth_model : birth_bool      ~ age_model * amh * afc            (binomial)
+euploid_model    <- readr::read_rds("data/models/euploid_model_revised_modeling_statistics_end.rds")
+live_birth_model <- readr::read_rds("data/models/livebirth_model_revised_modeling_statistics_end.rds")
 
 # ############################################################
 # # Export model coefficients for Excel pricing tool
@@ -256,7 +260,7 @@ live_birth_model <- glm(
 #   "outputs/live_birth_model_coefficients.csv"
 # )
 
-m1df$pred_euploid <- predict(euploid_model, new_data = m1df, type = "response")
+m1df$pred_euploid <- predict(euploid_model, newdata = m1df, type = "response")
 # m1df$pred_euploid <- predict(euploid_model, new_data = m1df, type = "response")
 
 # Before applying recalibration, get metrics for model.
@@ -492,10 +496,9 @@ euploid_coef_export = euploid_coef_export |>
     calib_results |> dplyr::filter(model == 'euploid')
   )
 
-readr::write_csv(
-  euploid_coef_export,
-  "outputs/euploid_model_coefficients.csv"
-)
+# -- removed: PipelineA_03 (master) is the single owner of the coefficient CSVs,
+#    and it now exports the SAME floored coefficients. Kept object for the report.
+# readr::write_csv(euploid_coef_export, "outputs/euploid_model_coefficients.csv")
 
 live_birth_coef_export <- coef(live_birth_model) |>
   as.data.frame() |>
@@ -508,10 +511,8 @@ live_birth_coef_export = live_birth_coef_export |>
     calib_results |> dplyr::filter(model == 'livebirth')
   )
 
-readr::write_csv(
-  live_birth_coef_export,
-  "outputs/live_birth_model_coefficients.csv"
-)
+# -- removed: PipelineA_03 (master) is the single owner of the coefficient CSVs.
+# readr::write_csv(live_birth_coef_export, "outputs/live_birth_model_coefficients.csv")
 ```
 
 ## Egg Actuarial Models (Beta-binomial / Binomial + Monte-Carlo Simulation) {.tabset}
@@ -529,16 +530,17 @@ Note: this model uses the patient / cycle-level table and does not currently fil
 
 ```{r}
 
-df_no_na = df |> dplyr::select(pat_id, tx_id, num_eggs_collected, age, amh, afc) |> tidyr::drop_na()
+df_no_na = df |> dplyr::select(pat_id, tx_id, num_eggs_collected, age, amh, afc) |> tidyr::drop_na() |> 
+  # -- consistency with PipelineA_01: eligibility exclusion, 99% egg-count cap, age floor --
+  dplyr::filter(amh <= 12 & afc <= 40) |> 
+  dplyr::filter(num_eggs_collected <= round(quantile(num_eggs_collected, 0.99))) |> 
+  dplyr::mutate(age_model = pmax(age, age_floor))
 
-# First, construct a Poisson-distribution of the number of eggs collected based on the data we have
-egg_model <- MASS::glm.nb(
-  num_eggs_collected ~ age + amh + afc + age*afc,
-  # family = quasipoisson(link = "log"),
-  data = df_no_na
-)
+# -- consistency: load the floored egg-1 model saved by PipelineA_01 --
+#   egg_model : num_eggs_collected ~ age_model + amh + afc + age_model:afc  (neg. binomial)
+egg_model <- readr::read_rds("data/models/egg_1_model_revised_modeling_statistics_end.rds")
 
-df_no_na$pred_eggmodel_1 = predict(egg_model, new_data = df_no_na, type = "response")
+df_no_na$pred_eggmodel_1 = predict(egg_model, newdata = df_no_na, type = "response")
 
 # Next, for each patient, based on their characteristics (age, afc, amh), simulate 
 # 2000 hypothetical egg gathering treatments; these make up the simulated
@@ -632,15 +634,17 @@ df_2 <- df %>%
 # Ensure we don't have missing data for any of our variables.
 df_2 = df_2 |> 
   dplyr::select(pat_id, eggs_2cycle_total, age, amh, afc, eggs_cycle1, eggs_cycle2, eggs_2cycle_total) |> 
-  tidyr::drop_na()
+  tidyr::drop_na() |> 
+  # -- consistency with PipelineA_01: eligibility exclusion, 99% 2-cycle cap, age floor --
+  dplyr::filter(amh <= 12 & afc <= 40) |> 
+  dplyr::filter(eggs_2cycle_total <= round(quantile(eggs_2cycle_total, 0.99))) |> 
+  dplyr::mutate(age_model = pmax(age, age_floor))
 
-egg2_model <- MASS::glm.nb(
-  eggs_2cycle_total ~ age + amh + afc + eggs_cycle1 + amh*afc,
-  # family = quasipoisson(link = "log"),
-  data = df_2
-)
+# -- consistency: load the floored egg-2 model saved by PipelineA_01 --
+#   egg2_model : eggs_2cycle_total ~ age_model + amh + afc + eggs_cycle1 + amh:afc  (neg. binomial)
+egg2_model <- readr::read_rds("data/models/egg_2_model_revised_modeling_statistics_end.rds")
 
-df_2$pred_eggmodel_2 = predict(egg2_model, new_data = df_2, type = "response")
+df_2$pred_eggmodel_2 = predict(egg2_model, newdata = df_2, type = "response")
 
 # Next, for each patient, based on their characteristics (age, afc, amh), simulate 
 # 2000 hypothetical egg gathering treatments; these make up the simulated
@@ -735,12 +739,3 @@ disp_euploid <- check_dispersion(euploid_model)
 disp_egg <- check_dispersion(egg_model)
 disp_egg2 <- check_dispersion(egg2_model)
 ```
-
-## Summary Table
-```{r}
-readr::write_rds(live_birth_model, "data/models/livebirth_model_revised_modeling_statistics_end.rds")
-readr::write_rds(euploid_model, "data/models/euploid_model_revised_modeling_statistics_end.rds")
-readr::write_rds(egg_model, "data/models/egg_1_model_revised_modeling_statistics_end.rds")
-readr::write_rds(egg2_model, "data/models/egg_2_model_revised_modeling_statistics_end.rds")
-```
-

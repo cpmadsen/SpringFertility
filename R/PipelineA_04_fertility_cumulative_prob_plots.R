@@ -29,14 +29,17 @@ library(patchwork)   # install if needed: install.packages("patchwork")
 
 
 # Calibration parameters (from April 2026 validated run)
-lb_cal_intercept <- lb_cal_int_refit
-lb_cal_slope     <- lb_cal_slope_refit
-eu_cal_intercept <- eu_cal_int_refit
-eu_cal_slope     <- eu_cal_slope_refit
 
+lb_cal_intercept <- readr::read_rds("data/models/lb_cal_int_refit.rds")
+lb_cal_slope     <- readr::read_rds("data/models/lb_cal_slope_refit.rds")
+eu_cal_intercept <- readr::read_rds("data/models/eu_cal_int_refit.rds")
+eu_cal_slope     <- readr::read_rds("data/models/eu_cal_slope_refit.rds")
+
+livebirth_model <- readr::read_rds("data/models/livebirth_model_revised_modeling_statistics_end.rds")
+euploid_model   <- readr::read_rds("data/models/euploid_model_revised_modeling_statistics_end.rds")
 
 # Age floor
-age_floor <- 28
+age_floor <- 32
 
 
 # ── 1. PREDICTION FUNCTIONS ────────────────────────────
@@ -53,7 +56,7 @@ apply_cal <- function(p_raw, intercept, slope) {
 p_cal_lb <- function(age, amh, afc,
                      model = livebirth_model) {
   age_m <- pmax(age, age_floor)
-  nd    <- data.frame(age_model = age_m, amh = amh, afc = afc)
+  nd <- data.frame(age_model = age_m, amh = amh, afc = afc)
   p_raw <- predict(model, newdata = nd, type = "response")
   apply_cal(p_raw, lb_cal_intercept, lb_cal_slope)
 }
@@ -63,7 +66,7 @@ p_cal_lb <- function(age, amh, afc,
 p_cal_eu <- function(age, amh, afc,
                      model = euploid_model) {
   age_m <- pmax(age, age_floor)
-  nd    <- data.frame(age_model = age_m, amh = amh, afc = afc)
+  nd <- data.frame(age_model = age_m, amh = amh, afc = afc)
   p_raw <- predict(model, newdata = nd, type = "response")
   apply_cal(p_raw, eu_cal_intercept, eu_cal_slope)
 }
@@ -80,7 +83,7 @@ cum_success <- function(p_per_cycle, n_cycles) {
 # while holding others at typical values
 
 
-ages     <- 28:43
+ages     <- 32:43
 amh_vals <- c(0.3, 0.5, 1.0, 2.0, 4.0, 8.0)
 afc_vals <- c(3, 6, 10, 15, 20, 30)
 n_cycles <- 1:3
@@ -113,11 +116,20 @@ df_age <- expand.grid(
   age    = ages,
   amh    = amh_vals,
   cycles = n_cycles
-) %>%
-  mutate(
-    afc    = typical_afc,
-    p_lb   = mapply(p_cal_lb, age, amh, afc),
-    p_eu   = mapply(p_cal_eu, age, amh, afc),
+) |>
+  tidyr::as_tibble() |> 
+  dplyr::mutate(afc = typical_afc) %>% 
+  dplyr::group_by(age, amh, afc) |> 
+  dplyr::group_split() |> 
+  lapply(\(x) {
+    x |> 
+      dplyr::mutate(
+    p_lb   = p_cal_lb(x$age, x$amh, x$afc),
+    p_eu   = p_cal_eu(x$age, x$amh, x$afc)
+      )
+  }) |> 
+  dplyr::bind_rows() |> 
+  dplyr::mutate(
     cum_lb = cum_success(p_lb, cycles),
     cum_eu = cum_success(p_eu, cycles),
     amh_label = factor(
@@ -336,7 +348,7 @@ p3_lb <- ggplot(df_heat,
     name     = "P(success\n2cy)"
   ) +
   scale_x_continuous(breaks = c(0,2,4,6,8,10)) +
-  scale_y_continuous(breaks = seq(28,43,2)) +
+  scale_y_continuous(breaks = seq(32,43,2)) +
   labs(
     title    = "Live Birth 2-Cycle",
     subtitle = paste0("Green = profitable patients. Red = high liability. AFC=", typical_afc),
@@ -360,7 +372,7 @@ p3_eu <- ggplot(df_heat,
     name     = "P(success\n2cy)"
   ) +
   scale_x_continuous(breaks = c(0,2,4,6,8,10)) +
-  scale_y_continuous(breaks = seq(28,43,2)) +
+  scale_y_continuous(breaks = seq(32,43,2)) +
   labs(
     title    = "Euploid 2-Cycle",
     subtitle = paste0("Green = profitable patients. Red = high liability. AFC=", typical_afc),

@@ -5,6 +5,10 @@ library(purrr)
 
 output_log = list()
 
+age_floor          <- 32
+eu_cal_int_refit   <- readr::read_rds("data/models/eu_cal_int_refit.rds")
+eu_cal_slope_refit <- readr::read_rds("data/models/eu_cal_slope_refit.rds")
+
 # Assumes the 2025 data is loaded as df_2025
 df_2025 = openxlsx::read.xlsx("data/spring_2025/2025 outcomes for risk premium validation.xlsx")
 
@@ -22,6 +26,8 @@ df_2025 = df_2025 |>
                 num_blast = as.numeric(num_blast),
                 num_m2_eggs = as.numeric(num_m2_eggs)) |> 
   dplyr::rename(patient_id = id)
+
+df_2025 <- df_2025 |> dplyr::mutate(age_model = pmax(age, age_floor))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # EGG FREEZING — Oocyte Cryopreservation cases
@@ -107,7 +113,8 @@ df_embryo$p_raw_eup <- predict(euploid_model, newdata=df_embryo, type="response"
 
 # Calibrate using April 2026 parameters
 logit <- function(p) log(p/(1-p))
-df_embryo$p_cal_eup <- plogis(0.0152 + 0.8508 * logit(df_embryo$p_raw_eup))
+# df_embryo$p_cal_eup <- plogis(0.0152 + 0.8508 * logit(df_embryo$p_raw_eup))
+df_embryo$p_cal_eup <- plogis(eu_cal_int_refit + eu_cal_slope_refit * logit(df_embryo$p_raw_eup))
 
 # Step 2: Check overall calibration
 cat("\n[Embryo - Euploid] Predicted mean:", mean(df_embryo$p_cal_eup, na.rm=TRUE))
@@ -266,7 +273,7 @@ output_log = output_log |> append(list("\n--- Surprise Payout Cases ---\n"))
 
 payout_review <- df_egg %>%
   filter(triggers_payout) %>%
-  select(patient_id, age, amh, afc, mu_hat, threshold_90,
+  dplyr::select(patient_id, age, amh, afc, mu_hat, threshold_90,
          num_m2_eggs, triggers_payout, surprise_failure) %>%
   arrange(desc(surprise_failure), mu_hat)
 
