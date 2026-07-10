@@ -9,7 +9,7 @@ editor_options:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = F, message = F, warning = F)
-
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
 library(magrittr)
 library(knitr)
 ```

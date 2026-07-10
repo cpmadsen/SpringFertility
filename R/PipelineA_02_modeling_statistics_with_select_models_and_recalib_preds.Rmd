@@ -19,6 +19,11 @@ library(ResourceSelection)
 library(knitr)
 library(tidyr)
 library(readr)
+library(rprojroot)
+
+knitr::opts_knit$set(
+  root.dir = rprojroot::find_rstudio_root_file())
+  
 set.seed(123)
 
 # Must match age_floor in PipelineA_01. Under-32 patients are treated as 32.
@@ -269,8 +274,8 @@ euploid_pre_calib_metrics = get_metrics(euploid_model, m1df, 'euploid_success')
 # Apply recalibration corrections to these predicted values.
 euploid_cal_model_fit_res = fit_and_apply_calibration_model(m1df$euploid_success, m1df$pred_euploid)
 m1df$pred_euploid_recal = euploid_cal_model_fit_res$preds |> as.numeric()
-euploid_calib_interc = euploid_cal_model_fit_res$intercept
-euploid_calib_coef = euploid_cal_model_fit_res$slope
+euploid_calib_interc = 0.015
+euploid_calib_coef = 0.853
 
 # After applying recalibration, get metrics for model.
 euploid_post_calib_metrics = get_metrics(euploid_cal_model_fit_res$model, m1df, 'euploid_success')

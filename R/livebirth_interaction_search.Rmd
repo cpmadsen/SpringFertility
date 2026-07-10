@@ -1,0 +1,115 @@
+---
+title: "Live-birth interaction search"
+output: html_document
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+library(dplyr)
+library(pROC)
+library(caret)
+library(knitr)
+set.seed(42)
+```
+
+```{r run}
+outcome_col <- "birth_bool"
+predictors  <- c("age_model", "amh", "afc")
+k_folds  <- 10
+n_repeat <- 5
+eps      <- 1e-4
+
+df_lb <- readr::read_rds("data/models/df_lb_train.rds")
+df_lb[[outcome_col]] <- as.numeric(df_lb[[outcome_col]])
+
+clip_prob <- function(x, e = eps) pmax(pmin(x, 1 - e), e)
+
+calib_coefs <- function(y, p) {
+  p <- clip_prob(p)
+  fit <- suppressWarnings(glm(y ~ qlogis(p), family = binomial))
+  c(intercept = unname(coef(fit)[1]), slope = unname(coef(fit)[2]))
+}
+
+score_preds <- function(y, p) {
+  p   <- clip_prob(p)
+  auc <- as.numeric(pROC::roc(y, p, quiet = TRUE)$auc)
+  br  <- mean((p - y)^2, na.rm = TRUE)
+  cc  <- calib_coefs(y, p)
+  c(auc = auc, brier = br,
+    cal_intercept = cc[["intercept"]], cal_slope = cc[["slope"]])
+}
+
+two_way_terms <- combn(predictors, 2, FUN = function(v) paste(v, collapse = ":"))
+two_way_subsets <- do.call(c, lapply(0:length(two_way_terms),
+  function(k) combn(two_way_terms, k, simplify = FALSE)))
+
+build_formula <- function(interaction_terms) {
+  rhs <- paste(c(predictors, interaction_terms), collapse = " + ")
+  list(formula = as.formula(paste(outcome_col, "~", rhs)),
+       label   = if (length(interaction_terms) == 0) "main effects only"
+                 else paste(interaction_terms, collapse = " + "))
+}
+
+candidates <- lapply(two_way_subsets, build_formula)
+candidates[[length(candidates) + 1]] <- list(
+  formula = as.formula(paste(outcome_col, "~ age_model * amh * afc")),
+  label   = "full 3-way: age_model * amh * afc (deployed)")
+
+cv_one_formula <- function(form, data) {
+  rep_scores <- vector("list", n_repeat)
+  for (r in seq_len(n_repeat)) {
+    set.seed(1000 + r)
+    folds <- caret::createFolds(factor(data[[outcome_col]]), k = k_folds, list = TRUE)
+    oof_pred <- rep(NA_real_, nrow(data))
+    for (f in folds) {
+      fit <- suppressWarnings(glm(form, data = data[-f, , drop = FALSE], family = binomial))
+      oof_pred[f] <- predict(fit, newdata = data[f, , drop = FALSE], type = "response")
+    }
+    ok <- !is.na(oof_pred)
+    rep_scores[[r]] <- score_preds(data[[outcome_col]][ok], oof_pred[ok])
+  }
+  m <- do.call(rbind, rep_scores); mu <- colMeans(m); sdv <- apply(m, 2, sd)
+  c(auc = mu[["auc"]], auc_sd = sdv[["auc"]], brier = mu[["brier"]],
+    cal_intercept = mu[["cal_intercept"]],
+    cal_slope = mu[["cal_slope"]], cal_slope_sd = sdv[["cal_slope"]])
+}
+
+results_tbl <- lapply(candidates, function(cand) {
+  full_fit <- suppressWarnings(glm(cand$formula, data = df_lb, family = binomial))
+  cv <- cv_one_formula(cand$formula, df_lb)
+  data.frame(
+    model         = cand$label,
+    n_params      = full_fit$rank,
+    cv_auc        = round(cv[["auc"]], 4),
+    cv_auc_sd     = round(cv[["auc_sd"]], 4),
+    cv_brier      = round(cv[["brier"]], 4),
+    cal_intercept = round(cv[["cal_intercept"]], 4),
+    cal_slope     = round(cv[["cal_slope"]], 4),
+    cal_slope_sd  = round(cv[["cal_slope_sd"]], 4),
+    AIC           = round(AIC(full_fit), 1),
+    BIC           = round(BIC(full_fit), 1),
+    stringsAsFactors = FALSE)
+}) |>
+  dplyr::bind_rows() |>
+  dplyr::mutate(
+    cal_slope_flag = dplyr::case_when(
+      cal_slope >= 0.80 & cal_slope <= 1.20 ~ "OK",
+      cal_slope >= 0.60 & cal_slope <= 1.50 ~ "review",
+      TRUE                                  ~ "action needed"
+    ),
+    cal_int_flag = dplyr::case_when(
+      abs(cal_intercept) <= 0.20 ~ "OK",
+      abs(cal_intercept) <= 0.50 ~ "review",
+      TRUE                       ~ "action needed"
+    )
+  ) |>
+  dplyr::arrange(dplyr::desc(cv_auc))
+
+dir.create("outputs", showWarnings = FALSE)
+readr::write_csv(results_tbl, "outputs/live_birth_interaction_search.csv")
+
+kable(results_tbl)
+```
