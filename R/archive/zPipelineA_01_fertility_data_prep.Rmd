@@ -448,7 +448,7 @@ clip_prob <- function(x, eps = 0.0001) {
 if (!cv_mode) {
   
   livebirth_model_refit <- glm(
-    birth_bool ~ age_model + amh + afc + age_model:amh,
+    birth_bool ~ age_model * amh * afc,
     data = df_lb_train,
     family = binomial
   )
@@ -646,13 +646,6 @@ readr::write_rds(df_lb_train,"data/models/df_lb_train.rds")
 readr::write_rds(df_eu_train,"data/models/df_eu_train.rds")
 readr::write_rds(df_e1_train,"data/models/df_e1_train.rds")
 readr::write_rds(df_e2_train,"data/models/df_e2_train.rds")
-
-# Validation frames (same 80/20 split), needed to reproduce the out-of-sample
-# AUC and validation-derived calibration outside this script.
-readr::write_rds(df_lb_val,"data/models/df_lb_val.rds")
-readr::write_rds(df_eu_val,"data/models/df_eu_val.rds")
-readr::write_rds(df_e1_val,"data/models/df_e1_val.rds")
-readr::write_rds(df_e2_val,"data/models/df_e2_val.rds")
 
 readr::write_rds(lb_cal_int_refit,"data/models/lb_cal_int_refit.rds")
 readr::write_rds(lb_cal_slope_refit,"data/models/lb_cal_slope_refit.rds")

@@ -10,39 +10,31 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
 knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
 library(dplyr)
 library(pROC)
-library(caret)
 library(knitr)
-set.seed(42)
 ```
 
 ```{r run}
+# Metrics reproduce the PipelineA_01 out-of-sample check exactly:
+# fit each candidate on df_lb_train, evaluate on df_lb_val, clip at 1e-4,
+# AUC via pROC::roc, calibration from glm(y ~ logit(pred_raw)) on df_lb_val.
+# The reported slope/intercept are therefore the single 80/20 validation
+# values the pipeline uses (the same numbers that reach pricing and Excel),
+# not cross-validated averages.
+
 outcome_col <- "birth_bool"
 predictors  <- c("age_model", "amh", "afc")
-k_folds  <- 10
-n_repeat <- 5
-eps      <- 1e-4
+eps         <- 1e-4
 
-df_lb <- readr::read_rds("data/models/df_lb_train.rds")
-df_lb[[outcome_col]] <- as.numeric(df_lb[[outcome_col]])
+df_train <- readr::read_rds("data/models/df_lb_train.rds")
+df_val   <- readr::read_rds("data/models/df_lb_val.rds")
+df_train[[outcome_col]] <- as.numeric(df_train[[outcome_col]])
+df_val[[outcome_col]]   <- as.numeric(df_val[[outcome_col]])
 
 clip_prob <- function(x, e = eps) pmax(pmin(x, 1 - e), e)
 
-calib_coefs <- function(y, p) {
-  p <- clip_prob(p)
-  fit <- suppressWarnings(glm(y ~ qlogis(p), family = binomial))
-  c(intercept = unname(coef(fit)[1]), slope = unname(coef(fit)[2]))
-}
-
-score_preds <- function(y, p) {
-  p   <- clip_prob(p)
-  auc <- as.numeric(pROC::roc(y, p, quiet = TRUE)$auc)
-  br  <- mean((p - y)^2, na.rm = TRUE)
-  cc  <- calib_coefs(y, p)
-  c(auc = auc, brier = br,
-    cal_intercept = cc[["intercept"]], cal_slope = cc[["slope"]])
-}
-
-two_way_terms <- combn(predictors, 2, FUN = function(v) paste(v, collapse = ":"))
+# Candidate set: main effects fixed, every hierarchy-respecting interaction
+# structure over the three predictors, plus the full 3-way.
+two_way_terms   <- combn(predictors, 2, FUN = function(v) paste(v, collapse = ":"))
 two_way_subsets <- do.call(c, lapply(0:length(two_way_terms),
   function(k) combn(two_way_terms, k, simplify = FALSE)))
 
@@ -56,57 +48,54 @@ build_formula <- function(interaction_terms) {
 candidates <- lapply(two_way_subsets, build_formula)
 candidates[[length(candidates) + 1]] <- list(
   formula = as.formula(paste(outcome_col, "~ age_model * amh * afc")),
-  label   = "full 3-way: age_model * amh * afc (deployed)")
+  label   = "full 3-way: age_model * amh * afc")
 
-cv_one_formula <- function(form, data) {
-  rep_scores <- vector("list", n_repeat)
-  for (r in seq_len(n_repeat)) {
-    set.seed(1000 + r)
-    folds <- caret::createFolds(factor(data[[outcome_col]]), k = k_folds, list = TRUE)
-    oof_pred <- rep(NA_real_, nrow(data))
-    for (f in folds) {
-      fit <- suppressWarnings(glm(form, data = data[-f, , drop = FALSE], family = binomial))
-      oof_pred[f] <- predict(fit, newdata = data[f, , drop = FALSE], type = "response")
-    }
-    ok <- !is.na(oof_pred)
-    rep_scores[[r]] <- score_preds(data[[outcome_col]][ok], oof_pred[ok])
-  }
-  m <- do.call(rbind, rep_scores); mu <- colMeans(m); sdv <- apply(m, 2, sd)
-  c(auc = mu[["auc"]], auc_sd = sdv[["auc"]], brier = mu[["brier"]],
-    cal_intercept = mu[["cal_intercept"]],
-    cal_slope = mu[["cal_slope"]], cal_slope_sd = sdv[["cal_slope"]])
-}
+eval_candidate <- function(cand) {
+  fit <- suppressWarnings(glm(cand$formula, data = df_train, family = binomial))
 
-results_tbl <- lapply(candidates, function(cand) {
-  full_fit <- suppressWarnings(glm(cand$formula, data = df_lb, family = binomial))
-  cv <- cv_one_formula(cand$formula, df_lb)
+  # Out-of-sample predictions on the validation split.
+  p_val <- clip_prob(predict(fit, newdata = df_val, type = "response"))
+  y_val <- df_val[[outcome_col]]
+
+  auc_val   <- as.numeric(pROC::roc(y_val, p_val, quiet = TRUE)$auc)
+  brier_val <- mean((p_val - y_val)^2, na.rm = TRUE)
+
+  # Validation-derived calibration, same form as PipelineA_01.
+  cal <- suppressWarnings(
+    glm(y_val ~ log(p_val / (1 - p_val)), family = binomial))
+  cal_int   <- unname(coef(cal)[1])
+  cal_slope <- unname(coef(cal)[2])
+
+  # In-sample AUC on the training split, for reference.
+  p_tr    <- clip_prob(predict(fit, newdata = df_train, type = "response"))
+  auc_tr  <- as.numeric(pROC::roc(df_train[[outcome_col]], p_tr, quiet = TRUE)$auc)
+
   data.frame(
     model         = cand$label,
-    n_params      = full_fit$rank,
-    cv_auc        = round(cv[["auc"]], 4),
-    cv_auc_sd     = round(cv[["auc_sd"]], 4),
-    cv_brier      = round(cv[["brier"]], 4),
-    cal_intercept = round(cv[["cal_intercept"]], 4),
-    cal_slope     = round(cv[["cal_slope"]], 4),
-    cal_slope_sd  = round(cv[["cal_slope_sd"]], 4),
-    AIC           = round(AIC(full_fit), 1),
-    BIC           = round(BIC(full_fit), 1),
+    n_params      = fit$rank,
+    val_auc       = round(auc_val, 4),
+    train_auc     = round(auc_tr, 4),
+    val_brier     = round(brier_val, 4),
+    cal_intercept = round(cal_int, 4),
+    cal_slope     = round(cal_slope, 4),
+    AIC           = round(AIC(fit), 1),
+    BIC           = round(BIC(fit), 1),
     stringsAsFactors = FALSE)
-}) |>
+}
+
+results_tbl <- lapply(candidates, eval_candidate) |>
   dplyr::bind_rows() |>
   dplyr::mutate(
     cal_slope_flag = dplyr::case_when(
       cal_slope >= 0.80 & cal_slope <= 1.20 ~ "OK",
       cal_slope >= 0.60 & cal_slope <= 1.50 ~ "review",
-      TRUE                                  ~ "action needed"
-    ),
+      TRUE                                  ~ "action needed"),
     cal_int_flag = dplyr::case_when(
       abs(cal_intercept) <= 0.20 ~ "OK",
       abs(cal_intercept) <= 0.50 ~ "review",
-      TRUE                       ~ "action needed"
-    )
+      TRUE                       ~ "action needed")
   ) |>
-  dplyr::arrange(dplyr::desc(cv_auc))
+  dplyr::arrange(dplyr::desc(val_auc))
 
 dir.create("outputs", showWarnings = FALSE)
 readr::write_csv(results_tbl, "outputs/live_birth_interaction_search.csv")

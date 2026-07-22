@@ -272,27 +272,13 @@ m1df$pred_euploid <- predict(euploid_model, newdata = m1df, type = "response")
 euploid_pre_calib_metrics = get_metrics(euploid_model, m1df, 'euploid_success')
 
 # Apply recalibration corrections to these predicted values.
-# Use the validation-derived euploid calibration (intercept 0.015, slope 0.853)
-# rather than re-deriving it at runtime, so the report matches the constants
-# used in pricing (PipelineA_03). Build a calibration glm of the standard form
-# logit(y) ~ logit(pred_raw), then overwrite its coefficients with the fixed
-# values so both the recalibrated predictions and the post-calibration metrics
-# reflect them.
+euploid_cal_model_fit_res = fit_and_apply_calibration_model(m1df$euploid_success, m1df$pred_euploid)
+m1df$pred_euploid_recal = euploid_cal_model_fit_res$preds |> as.numeric()
 euploid_calib_interc = 0.015
 euploid_calib_coef = 0.853
 
-.clip_prob = function(x, eps = 1e-4) pmax(pmin(x, 1 - eps), eps)
-m1df$euploid_logit_raw = qlogis(.clip_prob(m1df$pred_euploid))
-
-euploid_cal_model = glm(euploid_success ~ euploid_logit_raw,
-                        data = m1df, family = binomial)
-euploid_cal_model$coefficients[c(1, 2)] = c(euploid_calib_interc, euploid_calib_coef)
-
-m1df$pred_euploid_recal = predict(euploid_cal_model, newdata = m1df,
-                                  type = "response") |> as.numeric()
-
 # After applying recalibration, get metrics for model.
-euploid_post_calib_metrics = get_metrics(euploid_cal_model, m1df, 'euploid_success')
+euploid_post_calib_metrics = get_metrics(euploid_cal_model_fit_res$model, m1df, 'euploid_success')
 
 m1df_eup = m1df |> 
   dplyr::filter(euploid_success)
@@ -306,42 +292,13 @@ m1df_eup$pred_lb_given_euploid <- predict(
 # Before applying recalibration, get metrics for model.
 lb_pre_calib_metrics = get_metrics(live_birth_model, m1df_eup, 'birth_bool')
 
-# ── Load validation-derived calibration parameters from PipelineA_01 ──
-# These were derived on the held-out 20% validation set only.
-# Do NOT re-derive here — re-deriving on the full dataset causes
-# in-sample overfitting and produces incorrect calibration slopes.
-lb_calib_interc <- readr::read_rds("data/models/lb_cal_int_refit.rds")
-lb_calib_coef   <- readr::read_rds("data/models/lb_cal_slope_refit.rds")
+live_birth_cal_model_fit_res = fit_and_apply_calibration_model(m1df_eup$birth_bool, m1df_eup$pred_lb_given_euploid)
+m1df_eup$pred_lb_given_euploid_recal = live_birth_cal_model_fit_res$preds
+lb_calib_interc = live_birth_cal_model_fit_res$intercept
+lb_calib_coef = live_birth_cal_model_fit_res$slope
 
-# ── Hardcoded fallback reference ──────────────────────────────────────
-# After PipelineA_01 has rerun, replace the values below with the exact
-# numbers printed to the console by PipelineA_01.
-# Expected range based on interaction search: intercept ≈ -0.26, slope ≈ 1.60
-# lb_calib_interc <- -0.2625   # <-- replace with exact PipelineA_01 output
-# lb_calib_coef   <-  1.6018   # <-- replace with exact PipelineA_01 output
-
-# ── Safety check — stop if values are outside expected range ──────────
-stopifnot(
-  "LB calibration intercept out of expected range" =
-    lb_calib_interc > -0.50 & lb_calib_interc < 0,
-  "LB calibration slope out of expected range" =
-    lb_calib_coef > 1.20 & lb_calib_coef < 2.0
-)
-
-# ── Apply calibration — same pattern as euploid model above ──────────
-.clip_prob <- function(x, eps = 1e-4) pmax(pmin(x, 1 - eps), eps)
-m1df_eup$lb_logit_raw <- qlogis(.clip_prob(m1df_eup$pred_lb_given_euploid))
-
-lb_cal_model <- glm(birth_bool ~ lb_logit_raw, data = m1df_eup, family = binomial)
-lb_cal_model$coefficients[c(1, 2)] <- c(lb_calib_interc, lb_calib_coef)
-
-m1df_eup$pred_lb_given_euploid_recal <- predict(
-  lb_cal_model, newdata = m1df_eup, type = "response"
-) |> as.numeric()
-
-# After applying recalibration, get metrics for model.
-# (uses lb_cal_model; the previous fit_and_apply_calibration_model object is gone)
-lb_post_calib_metrics = get_metrics(lb_cal_model, m1df_eup, 'birth_bool')
+# Before applying recalibration, get metrics for model.
+lb_post_calib_metrics = get_metrics(live_birth_cal_model_fit_res$model, m1df_eup, 'birth_bool')
 
 m1df_eup$pred_live_birth_recal <- m1df_eup$pred_euploid_recal * m1df_eup$pred_lb_given_euploid_recal
 
