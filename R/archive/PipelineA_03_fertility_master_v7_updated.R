@@ -452,6 +452,7 @@ egg2_grid <- expand.grid(
   afc       = grid_afc,
   stringsAsFactors = FALSE
 ) %>%
+  filter(!(afc <= 6 & amh <= 2.0)) %>%
   mutate(
     # Predicted mean per cycle from egg1_model
     mu_1cy = predict(
